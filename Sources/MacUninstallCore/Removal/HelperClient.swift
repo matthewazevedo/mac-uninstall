@@ -12,6 +12,9 @@ public actor HelperClient: PrivilegedExecutor {
         case notRegistered
         case requiresApproval
         case enabled
+        /// The app is not in /Applications, which is where launchd looks for a
+        /// bundled daemon.
+        case needsInstallInApplications
         case unavailable(String)
 
         public var isUsable: Bool { self == .enabled }
@@ -32,9 +35,24 @@ public actor HelperClient: PrivilegedExecutor {
         case .notRegistered: .notRegistered
         case .enabled: .enabled
         case .requiresApproval: .requiresApproval
-        case .notFound: .unavailable("The helper is missing from the app bundle.")
+        case .notFound:
+            // launchd only resolves a bundled daemon for apps installed in
+            // /Applications. Running from a build folder, a DMG, or Downloads gives
+            // the same "not found" result as a genuinely missing helper, so tell the
+            // two apart rather than sending the user hunting for a bundle problem.
+            isInstalledInApplications
+                ? .unavailable("The helper is missing from the app bundle.")
+                : .needsInstallInApplications
         @unknown default: .unavailable("Unknown service status.")
         }
+    }
+
+    /// True when the app runs from a system or user Applications folder.
+    nonisolated public static var isInstalledInApplications: Bool {
+        let path = Bundle.main.bundleURL.standardizedFileURL.path
+        let userApplications = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Applications").path
+        return path.hasPrefix("/Applications/") || path.hasPrefix(userApplications + "/")
     }
 
     /// Registers the daemon, returning the resulting status.

@@ -15,7 +15,19 @@ and a sandboxed uninstaller cannot honestly claim to be thorough.
 
 ```bash
 Scripts/build-app.sh release
-open dist/MacUninstall.app
+```
+
+The signed bundle is staged at `~/Library/Caches/MacUninstall/build/MacUninstall.app`,
+with a copy in `dist/` for convenience. It is assembled outside the repository because
+this checkout lives in an iCloud-synced folder, and the file provider re-attaches a
+`com.apple.FinderInfo` xattr that `codesign` refuses to seal.
+
+**Install it to `/Applications` to use the privileged helper.** launchd only resolves a
+bundled daemon for apps in Applications; anywhere else, `SMAppService` reports the
+service as not found. The app detects this and says so rather than failing silently.
+
+```bash
+Scripts/notarize.sh
 ```
 
 ```bash
@@ -100,11 +112,40 @@ Tests/                     50 tests, including read-only smoke tests against thi
 `MacUninstallCore` has no UI dependency beyond AppKit for the running-app check, so the
 engine is testable and reusable on its own.
 
+## The privileged helper
+
+System-level leftovers — launch daemons, privileged helper tools, installer receipts —
+need root to remove. Rather than prompting for a password on every uninstall, the app
+ships a daemon that `SMAppService` installs from inside its own bundle. There is no
+separate installer and no `setuid` binary. The user approves it once under Login Items.
+
+The interface across that boundary is a fixed vocabulary of two operations —
+`quarantine(items:into:)` and `bootout(label:isDaemon:)` — not "run this command". An
+earlier design passed a shell script, which is fine for a one-shot authenticated prompt
+but would be a local privilege-escalation hole in a daemon that stays installed:
+anything able to reach the Mach service would get arbitrary root execution.
+
+The daemon trusts nothing the client sends:
+
+- Callers are pinned to the app's code signature with `setCodeSigningRequirement`. The
+  requirement is derived from the helper's *own* signature at runtime, so one source
+  tree builds correctly for Developer ID and for local ad-hoc use without a build-time
+  substitution that could silently produce a helper accepting anyone.
+- Every path is re-validated against `ProtectedPaths` on the root side.
+- The destination must be inside the user's quarantine area, or "move a file as root"
+  becomes "write anywhere as root".
+- Launchd labels are restricted to a strict character set, because the label is
+  concatenated into a domain target.
+
+`MacUninstallCore` links no UI framework, so nothing from AppKit is ever loaded into a
+root process. If the helper is absent or unapproved, `AdaptivePrivilegedExecutor` falls
+back to the authenticated prompt — the app works before approval rather than
+dead-ending.
+
 ## Known limitations
 
-- Elevation uses `do shell script … with administrator privileges`. This works and
-  prompts correctly, but a bundled `SMAppService` helper would be the better long-term
-  answer. `PrivilegedExecutor` exists as the seam for that swap.
+- Full Disk Access and the helper approval both bind to the signing identity, so both
+  must be re-granted whenever the certificate changes.
 - Mac App Store item IDs are only read when an app declares `ITunesItemIdentifier`;
   parsing the signed receipt would cover the rest.
 - A scan takes a few seconds on a full Library. Results render before sizes are

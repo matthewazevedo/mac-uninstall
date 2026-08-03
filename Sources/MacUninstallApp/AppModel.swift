@@ -85,6 +85,11 @@ final class AppModel {
         HelperClient.openApprovalSettings()
     }
 
+    /// Shows the app in Finder so the user can drag it to Applications.
+    func revealApp() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+    }
+
     func refreshPermissions() {
         fullDiskAccess = PermissionChecker.fullDiskAccessStatus()
     }
