@@ -105,9 +105,12 @@ struct ReviewView: View {
             Spacer()
 
             if model.selectionNeedsAdmin {
-                Label("Needs your password", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Label(
+                    model.privilegedWorkUsesHelper ? "Uses the background helper" : "Needs your password",
+                    systemImage: model.privilegedWorkUsesHelper ? "checkmark.shield.fill" : "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Button("Remove Selected") { showConfirmation = true }

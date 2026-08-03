@@ -41,6 +41,7 @@ struct ContentView: View {
             if model.fullDiskAccess == .denied {
                 FullDiskAccessBanner()
             }
+            HelperBanner()
 
             switch model.phase {
             case .idle:

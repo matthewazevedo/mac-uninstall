@@ -1,16 +1,31 @@
 import XCTest
 @testable import MacUninstallCore
 
-/// Records scripts instead of running them, so tests never elevate or delete.
+/// Records requests instead of performing them, so tests never elevate or delete.
 final class SpyPrivilegedExecutor: PrivilegedExecutor, @unchecked Sendable {
+    struct QuarantineCall: Sendable {
+        var items: [URL]
+        var directory: URL
+    }
+
     private let lock = NSLock()
-    private var _scripts: [String] = []
-    var scripts: [String] { lock.withLock { _scripts } }
+    private var _quarantineCalls: [QuarantineCall] = []
+    private var _bootouts: [(label: String, isDaemon: Bool)] = []
+
+    var quarantineCalls: [QuarantineCall] { lock.withLock { _quarantineCalls } }
+    var bootouts: [(label: String, isDaemon: Bool)] { lock.withLock { _bootouts } }
 
     var errorToThrow: Error?
+    var failuresToReturn: [String: String] = [:]
 
-    func run(script: String) async throws {
-        lock.withLock { _scripts.append(script) }
+    func quarantine(items: [URL], into directory: URL) async throws -> [String: String] {
+        lock.withLock { _quarantineCalls.append(QuarantineCall(items: items, directory: directory)) }
+        if let errorToThrow { throw errorToThrow }
+        return failuresToReturn
+    }
+
+    func bootout(label: String, isDaemon: Bool) async throws {
+        lock.withLock { _bootouts.append((label, isDaemon)) }
         if let errorToThrow { throw errorToThrow }
     }
 }
@@ -47,14 +62,14 @@ final class RemoverTests: XCTestCase {
 
         XCTAssertEqual(report.failed.count, dangerous.count, "Every protected path must be refused")
         XCTAssertTrue(report.succeeded.isEmpty)
-        XCTAssertTrue(spy.scripts.isEmpty, "Nothing should reach the privileged executor")
+        XCTAssertTrue(spy.quarantineCalls.isEmpty, "Nothing should reach the privileged executor")
         for outcome in report.failed {
             XCTAssertTrue(outcome.message?.contains("Refused") == true, outcome.message ?? "")
         }
     }
 
-    /// All privileged items share a single elevation, so the user is prompted once.
-    func testPrivilegedItemsAreBatchedIntoOneAuthorizedScript() async {
+    /// All privileged items travel in one request, so the user is prompted at most once.
+    func testPrivilegedItemsAreBatchedIntoASingleRequest() async {
         let spy = SpyPrivilegedExecutor()
         let remover = Remover(options: .init(unloadLaunchItems: false), privileged: spy)
 
@@ -65,29 +80,30 @@ final class RemoverTests: XCTestCase {
 
         let report = await remover.remove(items)
 
-        XCTAssertEqual(spy.scripts.count, 1, "One elevation for the whole batch")
-        let script = spy.scripts[0]
-        XCTAssertTrue(script.contains("/Library/LaunchDaemons/com.test.fake.plist"))
-        XCTAssertTrue(script.contains("/Library/PrivilegedHelperTools/com.test.fake"))
-        XCTAssertTrue(script.contains("MANIFEST.txt"), "A manifest makes the move reversible")
-        XCTAssertTrue(script.contains("/bin/mv"), "Items are moved, never deleted")
-        XCTAssertFalse(script.contains("rm -rf"), "Privileged removal must never hard-delete")
+        XCTAssertEqual(spy.quarantineCalls.count, 1, "One request for the whole batch")
+        let call = spy.quarantineCalls[0]
+        XCTAssertEqual(Set(call.items.map(\.path)), Set(items.map(\.url.path)))
+        XCTAssertTrue(
+            call.directory.path.contains("MacUninstall/Quarantine"),
+            "Items are staged for recovery, never deleted"
+        )
         XCTAssertTrue(report.isFullSuccess)
         XCTAssertNotNil(report.quarantineDirectory)
     }
 
-    func testPathsWithQuotesAreEscapedInTheGeneratedScript() async {
+    func testPerItemFailuresFromTheHelperAreReportedIndividually() async {
         let spy = SpyPrivilegedExecutor()
+        spy.failuresToReturn = ["/Library/LaunchDaemons/com.test.fake.plist": "Refused by the helper."]
         let remover = Remover(options: .init(unloadLaunchItems: false), privileged: spy)
 
-        // A single quote in a filename must not break out of the shell string.
-        _ = await remover.remove([
-            leftover("/Library/Application Support/it's a trap'; rm -rf /", admin: true)
+        let report = await remover.remove([
+            leftover("/Library/LaunchDaemons/com.test.fake.plist", admin: true, category: .launchItems),
+            leftover("/Library/PrivilegedHelperTools/com.test.fake", admin: true, category: .privilegedHelpers),
         ])
 
-        let script = spy.scripts.first ?? ""
-        XCTAssertFalse(script.contains("; rm -rf /\n"), "Quoting must neutralise injected commands")
-        XCTAssertTrue(script.contains("'\\''"), "Single quotes should be shell-escaped")
+        XCTAssertEqual(report.failed.count, 1)
+        XCTAssertEqual(report.succeeded.count, 1)
+        XCTAssertTrue(report.failed[0].message?.contains("Refused by the helper") == true)
     }
 
     func testAuthorizationFailureIsReportedPerItem() async {
@@ -102,6 +118,21 @@ final class RemoverTests: XCTestCase {
         XCTAssertFalse(report.isFullSuccess)
         XCTAssertEqual(report.failed.count, 1)
         XCTAssertTrue(report.failed[0].message?.contains("cancelled") == true)
+    }
+
+    /// Launch daemons must be unloaded before their plists go, or the job keeps
+    /// running and can recreate the files just removed.
+    func testSystemLaunchDaemonsAreUnloadedBeforeRemoval() async {
+        let spy = SpyPrivilegedExecutor()
+        let remover = Remover(privileged: spy)
+
+        _ = await remover.remove([
+            leftover("/Library/LaunchDaemons/com.test.daemon.plist", admin: true, category: .launchItems)
+        ])
+
+        XCTAssertEqual(spy.bootouts.count, 1)
+        XCTAssertEqual(spy.bootouts[0].label, "com.test.daemon")
+        XCTAssertTrue(spy.bootouts[0].isDaemon)
     }
 
     /// Trashing is verified against a real file so the reversible path is exercised.
@@ -120,9 +151,18 @@ final class RemoverTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: victim.path), "Item should have left its original location")
         XCTAssertEqual(report.succeeded.first?.message, "Moved to Trash.")
 
-        // Clean up whatever landed in the Trash.
         let trashed = fm.homeDirectoryForCurrentUser
             .appending(path: ".Trash/\(victim.lastPathComponent)")
         try? fm.removeItem(at: trashed)
+    }
+
+    // MARK: - AppleScript fallback
+
+    func testShellQuotingNeutralisesInjectedCommands() {
+        let quoted = AppleScriptPrivilegedExecutor.shellQuote("it's a trap'; rm -rf /")
+        XCTAssertTrue(quoted.hasPrefix("'") && quoted.hasSuffix("'"))
+        XCTAssertTrue(quoted.contains("'\\''"), "Single quotes must be escaped")
+        // The dangerous text survives only as literal characters inside the quotes.
+        XCTAssertFalse(quoted.contains("; rm -rf /'\n"))
     }
 }

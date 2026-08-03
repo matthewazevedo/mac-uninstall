@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import MacUninstallCore
 
 /// Ensures an app is not running before it is removed.
 ///

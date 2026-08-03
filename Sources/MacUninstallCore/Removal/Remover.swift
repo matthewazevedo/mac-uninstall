@@ -23,23 +23,6 @@ public struct RemovalReport: Sendable {
     public var isFullSuccess: Bool { failed.isEmpty }
 }
 
-public enum RemovalError: LocalizedError {
-    case refusedUnsafePath(URL, ProtectedPaths.Rejection)
-    case authorizationFailed
-    case authorizationCancelled
-
-    public var errorDescription: String? {
-        switch self {
-        case .refusedUnsafePath(let url, let rejection):
-            "Refused to remove \(url.path): \(rejection.explanation)"
-        case .authorizationFailed:
-            "Administrator authorization failed."
-        case .authorizationCancelled:
-            "Administrator authorization was cancelled."
-        }
-    }
-}
-
 /// Removes leftovers, reversibly.
 ///
 /// Nothing is ever destroyed outright. User-owned items go to the Trash so Finder's
@@ -67,7 +50,7 @@ public struct Remover: Sendable {
     let options: Options
     let privileged: PrivilegedExecutor
 
-    public init(options: Options = .init(), privileged: PrivilegedExecutor = AppleScriptPrivilegedExecutor()) {
+    public init(options: Options = .init(), privileged: PrivilegedExecutor = AdaptivePrivilegedExecutor()) {
         self.options = options
         self.privileged = privileged
     }
@@ -138,28 +121,22 @@ public struct Remover: Sendable {
 
     // MARK: - Privileged
 
-    /// Moves root-owned items into a quarantine folder in one authenticated batch.
+    /// Moves root-owned items into a quarantine folder in one privileged batch.
     ///
-    /// A single elevation covers all items, so the user sees one password prompt
-    /// rather than one per file.
+    /// A single elevation covers every item, so the user is prompted once at most —
+    /// and not at all once the helper daemon is approved.
     private func quarantine(_ items: [Leftover], into directory: URL) async -> [RemovalOutcome] {
-        var script = "set -e\n"
-        script += "/bin/mkdir -p \(shellQuote(directory.path))\n"
-
-        for item in items {
-            let destination = directory.appending(path: item.url.lastPathComponent)
-            script += "/bin/mv -f \(shellQuote(item.url.path)) \(shellQuote(destination.path))\n"
-        }
-
-        // Leave a manifest so the move is auditable and reversible by hand.
-        let manifest = items.map(\.url.path).joined(separator: "\n")
-        let manifestPath = directory.appending(path: "MANIFEST.txt").path
-        script += "/bin/cat > \(shellQuote(manifestPath)) <<'MACUNINSTALL_EOF'\n\(manifest)\nMACUNINSTALL_EOF\n"
-
         do {
-            try await privileged.run(script: script)
-            return items.map {
-                RemovalOutcome(url: $0.url, succeeded: true, message: "Moved to quarantine at \(directory.path).")
+            let failures = try await privileged.quarantine(items: items.map(\.url), into: directory)
+            return items.map { item in
+                if let message = failures[item.url.path] {
+                    return RemovalOutcome(url: item.url, succeeded: false, message: message)
+                }
+                return RemovalOutcome(
+                    url: item.url,
+                    succeeded: true,
+                    message: "Moved to quarantine at \(directory.path)."
+                )
             }
         } catch {
             return items.map {
@@ -176,25 +153,20 @@ public struct Remover: Sendable {
         for job in jobs {
             let label = job.url.deletingPathExtension().lastPathComponent
             let isDaemon = job.url.path.contains("/LaunchDaemons/")
-            let domain = isDaemon ? "system" : "gui/\(getuid())"
 
             if isDaemon {
-                // Requires elevation; failure is non-fatal since the file removal
-                // still happens and the job will not survive a reboot.
-                try? await privileged.run(script: "/bin/launchctl bootout \(domain)/\(label) || true\n")
+                // Needs elevation. Failure is non-fatal: the file is still removed and
+                // the job cannot survive a reboot without it.
+                try? await privileged.bootout(label: label, isDaemon: true)
             } else {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                process.arguments = ["bootout", "\(domain)/\(label)"]
+                process.arguments = ["bootout", "gui/\(getuid())/\(label)"]
                 process.standardOutput = Pipe()
                 process.standardError = Pipe()
                 try? process.run()
                 process.waitUntilExit()
             }
         }
-    }
-
-    private func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

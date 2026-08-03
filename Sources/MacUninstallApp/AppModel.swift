@@ -26,6 +26,7 @@ final class AppModel {
     var report: RemovalReport?
     var errorMessage: String?
     var fullDiskAccess: PermissionChecker.Status = .indeterminate
+    var helperStatus: HelperClient.Status = .notRegistered
     var isDropTargeted = false
 
     private let scanner = AppScanner()
@@ -61,11 +62,37 @@ final class AppModel {
 
     func onAppear() {
         refreshPermissions()
+        refreshHelperStatus()
         loadInstalledApps()
+    }
+
+    // MARK: - Privileged helper
+
+    func refreshHelperStatus() {
+        helperStatus = HelperClient.status
+    }
+
+    /// Registers the daemon. macOS then requires a one-time approval in Login Items,
+    /// which is why the result is surfaced rather than assumed to be success.
+    func installHelper() {
+        helperStatus = HelperClient.register()
+        if helperStatus == .requiresApproval {
+            HelperClient.openApprovalSettings()
+        }
+    }
+
+    func openHelperSettings() {
+        HelperClient.openApprovalSettings()
     }
 
     func refreshPermissions() {
         fullDiskAccess = PermissionChecker.fullDiskAccessStatus()
+    }
+
+    /// True when the current selection would be handled by the daemon rather than a
+    /// password prompt, so the UI can say which is about to happen.
+    var privilegedWorkUsesHelper: Bool {
+        selectionNeedsAdmin && helperStatus == .enabled
     }
 
     func loadInstalledApps() {
@@ -217,6 +244,7 @@ final class AppModel {
         errorMessage = nil
         phase = .idle
         refreshPermissions()
+        refreshHelperStatus()
     }
 }
 
