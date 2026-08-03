@@ -99,18 +99,16 @@ otherwise recreate the files just deleted.
 ## Layout
 
 ```
-Sources/MacUninstallCore/
+Sources/MacUninstallCore/     Pure Foundation; safe to link into a root process
   Models/       AppIdentity, Leftover, Confidence, ScanResult
   Discovery/    AppScanner — bundle identity, code signature, nested helpers
   Scanning/     SearchLocation catalog, Matcher, LeftoverScanner
-  Removal/      Remover, PrivilegedExecutor
-  Support/      ProtectedPaths, PermissionChecker, RunningAppGuard
-Sources/MacUninstallApp/   SwiftUI app: sidebar, drop target, review, summary
-Tests/                     50 tests, including read-only smoke tests against this Mac
+  Removal/      Remover, PrivilegedExecutor, HelperClient, HelperValidation
+  Support/      ProtectedPaths, PermissionChecker
+Sources/MacUninstallHelper/   The root daemon: XPC listener and privileged operations
+Sources/MacUninstallApp/      SwiftUI app, plus RunningAppGuard (the only AppKit user)
+Tests/                        58 tests, incl. read-only smoke tests against this Mac
 ```
-
-`MacUninstallCore` has no UI dependency beyond AppKit for the running-app check, so the
-engine is testable and reusable on its own.
 
 ## The privileged helper
 
