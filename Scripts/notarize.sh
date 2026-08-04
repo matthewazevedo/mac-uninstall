@@ -54,15 +54,28 @@ if ! codesign --display --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime"; the
     exit 1
 fi
 
-if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+# CI has no keychain profile, so credentials may arrive as environment variables
+# instead. Both paths run the same submission below.
+NOTARY_ARGS=()
+if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_PASSWORD:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ]; then
+    echo "==> Using credentials from the environment"
+    NOTARY_ARGS=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$NOTARY_TEAM_ID")
+elif xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+    NOTARY_ARGS=(--keychain-profile "$PROFILE")
+fi
+
+if [ ${#NOTARY_ARGS[@]} -eq 0 ]; then
     cat <<NOTE
 
-No stored notarytool credentials named "$PROFILE".
+No notarisation credentials.
 
-Create them once, in your own terminal:
+Locally, store them once in your own terminal:
 
     xcrun notarytool store-credentials $PROFILE \\
         --apple-id "you@example.com" --team-id F57J2WBYN8
+
+Or set NOTARY_APPLE_ID, NOTARY_PASSWORD and NOTARY_TEAM_ID in the environment,
+which is how the release workflow supplies them.
 
 NOTE
     exit 1
@@ -77,7 +90,7 @@ echo "==> Building DMG"
 # --------------------------------------------------------------- notarise ----
 
 echo "==> Submitting to Apple (this usually takes a few minutes)"
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait \
+xcrun notarytool submit "$DMG" "${NOTARY_ARGS[@]}" --wait \
     | sed 's/^/    /'
 
 echo "==> Stapling"

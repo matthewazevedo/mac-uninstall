@@ -1,0 +1,108 @@
+name: Release
+
+# Tag a version to ship it:
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# The workflow builds, signs, notarises and staples the disk image, then publishes it
+# as a release asset. It reuses the same scripts as a local build, so what ships is
+# what you get from `Scripts/make-dmg.sh` on your own machine.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#
+#   DEVELOPER_ID_CERT       Base64 of your exported Developer ID Application .p12.
+#                           Export from Keychain Access, then:
+#                             base64 -i Certificates.p12 | pbcopy
+#   DEVELOPER_ID_CERT_PASSWORD  The password you set when exporting the .p12.
+#   APPLE_ID                Your Apple ID email.
+#   APPLE_APP_PASSWORD      An app-specific password from appleid.apple.com —
+#                           never your real Apple ID password.
+#   APPLE_TEAM_ID           F57J2WBYN8
+#
+# The certificate never touches the repository: it is imported into a throwaway
+# keychain that exists only for the length of one job.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest available Xcode
+        # Swift 6 language mode needs Xcode 16 or later. Picking the highest installed
+        # version avoids pinning to one the runner image may drop.
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Run tests
+        # A release that cannot pass its own safety tests should not be published.
+        run: swift test
+
+      - name: Import the signing certificate
+        env:
+          CERT: ${{ secrets.DEVELOPER_ID_CERT }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN=$RUNNER_TEMP/build.keychain
+          # Random, single-use, and never leaves the runner.
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          # Lets codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning | grep "Developer ID Application"
+
+      - name: Build and sign the app
+        run: Scripts/build-app.sh release
+
+      - name: Build the disk image
+        # The Finder layout step is skipped automatically here: a runner has no Finder
+        # session to script, and an unarranged image installs just the same.
+        run: Scripts/make-dmg.sh
+
+      - name: Notarise and staple
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: Scripts/notarize.sh
+
+      - name: Confirm Gatekeeper accepts it
+        # The real test: a stapled image opens on a machine that has never seen it.
+        run: |
+          spctl --assess --type open --context context:primary-signature \
+            --verbose=2 dist/MacUninstall.dmg
+          xcrun stapler validate dist/MacUninstall.dmg
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            dist/MacUninstall.dmg \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+
+      - name: Clean up the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain" || true

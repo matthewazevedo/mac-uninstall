@@ -5,6 +5,33 @@ caches, containers, launch daemons, privileged helpers. This app finds the rest 
 footprint, shows you exactly what it found and why, and moves it somewhere you can get
 it back from.
 
+## Install
+
+Download `MacUninstall.dmg` from the
+[latest release](https://github.com/matthewazevedo/mac-uninstall/releases/latest),
+open it, and drag the app to Applications.
+
+**It has to live in `/Applications`.** launchd only resolves the bundled helper daemon
+for apps installed there; anywhere else the app still works, but system-level removals
+fall back to asking for your password every time. The app detects this and says so.
+
+Then grant **Full Disk Access** in System Settings → Privacy & Security. Without it,
+protected folders read as *empty* rather than erroring, so leftovers are silently
+missed — the app shows a warning banner rather than pretending the scan was complete.
+
+## Releasing
+
+Tag a version and the workflow in `.github/workflows/release.yml` builds, signs,
+notarises, staples, and publishes the disk image:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+It needs five repository secrets — the certificate and Apple credentials — listed at
+the top of that workflow file. They are never committed; the signing certificate is
+imported into a throwaway keychain that lives for one job.
+
 ## Status
 
 Working v1. Scanning, review, and removal all function end to end. Distributed directly
