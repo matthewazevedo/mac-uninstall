@@ -83,6 +83,14 @@ mkdir -p "$APP/Contents/MacOS" \
 cp "$BIN_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 cp "$BIN_DIR/$HELPER_ID" "$APP/Contents/MacOS/$HELPER_ID"
 
+echo "==> Drawing the app icon"
+# Generated rather than checked in, so the icon stays in step with the design
+# system's size ladder rather than drifting from it as a stale binary.
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+swift "$ROOT/Scripts/make-icon.swift" "$ICONSET" | sed 's/^/    /'
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+rm -rf "$(dirname "$ICONSET")"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -99,6 +107,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>       <true/>
     <key>NSSupportsAutomaticTermination</key><false/>
     <key>NSPrincipalClass</key>              <string>NSApplication</string>
+    <key>CFBundleIconFile</key>              <string>AppIcon</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Mac Uninstall needs administrator rights to move system-level leftovers, such as launch daemons and privileged helper tools, out of the way.</string>
     <key>NSSystemAdministrationUsageDescription</key>
