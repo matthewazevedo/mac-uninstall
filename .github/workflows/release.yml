@@ -25,6 +25,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Run manually from the Actions tab to verify the secrets end to end before
+  # committing to a tag. Everything runs except publishing.
   workflow_dispatch:
 
 permissions:
@@ -95,6 +97,9 @@ jobs:
           xcrun stapler validate dist/MacUninstall.dmg
 
       - name: Publish the release
+        # Tags only. A manual run is a dry run: it proves the secrets, signing and
+        # notarisation all work without creating a release named after the branch.
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
