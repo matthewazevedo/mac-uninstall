@@ -104,11 +104,16 @@ public actor HelperClient: PrivilegedExecutor {
                 options: .privileged
             )
             new.remoteObjectInterface = NSXPCInterface(with: HelperProtocol.self)
+            // `self` is bound to an immutable local before the inner Task captures it.
+            // Capturing the weak optional directly is a mutable capture, which strict
+            // concurrency rejects when the handler is passed as a `sending` parameter.
             new.invalidationHandler = { [weak self] in
-                Task { await self?.clearConnection() }
+                guard let self else { return }
+                Task { await self.clearConnection() }
             }
             new.interruptionHandler = { [weak self] in
-                Task { await self?.clearConnection() }
+                guard let self else { return }
+                Task { await self.clearConnection() }
             }
             new.resume()
             connection = new
