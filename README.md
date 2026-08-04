@@ -35,6 +35,27 @@ often the xattr is stripped. Sync can also revert uncommitted edits without warn
 bundled daemon for apps in Applications; anywhere else, `SMAppService` reports the
 service as not found. The app detects this and says so rather than failing silently.
 
+Then build the installer:
+
+```bash
+Scripts/make-dmg.sh
+```
+
+That produces `dist/MacUninstall.dmg` — the app beside an `/Applications` alias, so
+the install gesture is the one that puts it where the helper needs it. The image is
+signed with the same Developer ID as the app.
+
+A DMG rather than a `.pkg`: signing a package needs a *Developer ID Installer*
+certificate, which is a different cert from the *Developer ID Application* one, and
+the drag gesture makes the `/Applications` requirement visible rather than silent.
+
+Finally, notarise. Store credentials once — this prompts for an app-specific
+password, so run it yourself:
+
+```bash
+xcrun notarytool store-credentials MacUninstall --apple-id "you@example.com" --team-id F57J2WBYN8
+```
+
 ```bash
 Scripts/notarize.sh
 ```

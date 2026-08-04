@@ -71,15 +71,8 @@ fi
 # ------------------------------------------------------------------ dmg ------
 
 echo "==> Building DMG"
-rm -f "$DMG"
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
-
-ditto "$APP" "$STAGE/$APP_NAME.app"
-ln -s /Applications "$STAGE/Applications"
-
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" \
-    | sed 's/^/    /'
+# Delegated so the image the notary service sees is byte-for-byte the one that ships.
+"$ROOT/Scripts/make-dmg.sh" | sed 's/^/    /'
 
 # --------------------------------------------------------------- notarise ----
 
