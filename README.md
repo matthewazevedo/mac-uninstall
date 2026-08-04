@@ -11,6 +11,13 @@ Working v1. Scanning, review, and removal all function end to end. Distributed d
 (not via the Mac App Store), because the sandbox cannot read other apps' Library folders
 and a sandboxed uninstaller cannot honestly claim to be thorough.
 
+The privileged helper is verified working on macOS 26: installed from `/Applications`,
+registered via `SMAppService`, activated on demand by launchd as root, and reached over
+XPC with the code-signature pin enforced.
+
+Not yet notarised — that needs an app-specific password only you can supply. Until then
+`spctl` reports the app as `Unnotarized Developer ID`, so it will warn on other Macs.
+
 ## Build and run
 
 ```bash
@@ -144,6 +151,11 @@ dead-ending.
 
 ## Known limitations
 
+- Not notarised yet. Store credentials once with `xcrun notarytool store-credentials`,
+  then run `Scripts/notarize.sh`.
+- `SMAppService.register()` can throw while the registration in fact succeeds — seen as
+  "Operation not permitted" on a job launchd then bootstrapped normally. `HelperClient`
+  re-reads the resulting status and trusts that over the thrown error.
 - Full Disk Access and the helper approval both bind to the signing identity, so both
   must be re-granted whenever the certificate changes.
 - Mac App Store item IDs are only read when an app declares `ITunesItemIdentifier`;

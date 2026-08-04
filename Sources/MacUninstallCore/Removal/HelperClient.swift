@@ -36,13 +36,13 @@ public actor HelperClient: PrivilegedExecutor {
         case .enabled: .enabled
         case .requiresApproval: .requiresApproval
         case .notFound:
-            // launchd only resolves a bundled daemon for apps installed in
-            // /Applications. Running from a build folder, a DMG, or Downloads gives
-            // the same "not found" result as a genuinely missing helper, so tell the
-            // two apart rather than sending the user hunting for a bundle problem.
-            isInstalledInApplications
-                ? .unavailable("The helper is missing from the app bundle.")
-                : .needsInstallInApplications
+            // launchd reports notFound for a bundled daemon it has never been asked
+            // to register, so before the first attempt this is indistinguishable from
+            // notRegistered — treating it as an error would dead-end the user with no
+            // way to install. Only the location is worth distinguishing here, because
+            // launchd will not resolve a bundled daemon outside Applications at all.
+            // Any genuine problem surfaces from register(), which returns a real error.
+            isInstalledInApplications ? .notRegistered : .needsInstallInApplications
         @unknown default: .unavailable("Unknown service status.")
         }
     }
@@ -66,6 +66,14 @@ public actor HelperClient: PrivilegedExecutor {
             let nsError = error as NSError
             // kSMErrorAlreadyRegistered
             if nsError.code != 134 {
+                // register() can throw while the daemon was in fact installed —
+                // observed as "Operation not permitted" on a registration that
+                // launchd went on to bootstrap successfully. The resulting status is
+                // authoritative, so only report a failure the system also agrees with.
+                let resulting = status
+                if resulting == .enabled || resulting == .requiresApproval {
+                    return resulting
+                }
                 return .unavailable(error.localizedDescription)
             }
         }

@@ -31,6 +31,10 @@ final class AppModel {
 
     private let scanner = AppScanner()
 
+    /// One client for the app's lifetime so the XPC connection is reused rather than
+    /// rebuilt for every request.
+    private let helper = HelperClient()
+
     // MARK: - Derived
 
     var filteredApps: [AppIdentity] {
@@ -68,16 +72,43 @@ final class AppModel {
 
     // MARK: - Privileged helper
 
+    /// Reads the daemon's registration state, then confirms it actually answers.
+    ///
+    /// launchd reporting "enabled" only means the job is installed. If the XPC
+    /// handshake fails — a signature pin that no longer matches after re-signing, or a
+    /// stale daemon from a previous build — the first sign of it would otherwise be a
+    /// failed removal, which is the worst possible moment to find out.
     func refreshHelperStatus() {
         helperStatus = HelperClient.status
+        guard helperStatus == .enabled else { return }
+
+        Task {
+            do {
+                let version = try await helper.installedVersion()
+                guard version != HelperConstants.protocolVersion else { return }
+                self.helperStatus = .unavailable(
+                    "The installed helper speaks version \(version), but this app expects "
+                    + "version \(HelperConstants.protocolVersion). Reinstall it."
+                )
+            } catch {
+                self.helperStatus = .unavailable(error.localizedDescription)
+            }
+        }
     }
 
     /// Registers the daemon. macOS then requires a one-time approval in Login Items,
     /// which is why the result is surfaced rather than assumed to be success.
     func installHelper() {
         helperStatus = HelperClient.register()
-        if helperStatus == .requiresApproval {
+        switch helperStatus {
+        case .requiresApproval:
             HelperClient.openApprovalSettings()
+        case .unavailable(let reason):
+            // Registration is the only step that produces a real diagnosis, so do not
+            // let it fail silently behind a banner.
+            errorMessage = "The background helper could not be installed. \(reason)"
+        default:
+            break
         }
     }
 
@@ -235,7 +266,9 @@ final class AppModel {
                 return
             }
 
-            let report = await Remover().remove(items)
+            let report = await Remover(
+                privileged: AdaptivePrivilegedExecutor(helper: self.helper)
+            ).remove(items)
             self.report = report
             self.phase = .finished
             self.loadInstalledApps()
