@@ -51,8 +51,12 @@ public struct LeftoverScanner: Sendable {
         var inaccessible: [URL] = []
         var claimed: Set<String> = []
 
-        // The application bundle is always part of its own footprint.
-        if fm.fileExists(atPath: identity.bundleURL.path) {
+        // The application bundle is part of its own footprint, unless macOS protects
+        // it — Apple's own apps under /System cannot be removed, and listing one would
+        // promise something the removal step is guaranteed to refuse. This goes through
+        // the same injectable check as every other path rather than ProtectedPaths
+        // directly, so the rule is consistent and testable.
+        if fm.fileExists(atPath: identity.bundleURL.path), options.safetyCheck(identity.bundleURL) {
             leftovers.append(Leftover(
                 url: identity.bundleURL,
                 category: .application,

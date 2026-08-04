@@ -20,19 +20,20 @@ final class RealSystemSmokeTests: XCTestCase {
         XCTAssertTrue(apps.contains { $0.bundleID != nil }, "Bundle IDs should be readable")
     }
 
-    func testSignatureEnrichmentYieldsTeamAndVendor() throws {
+    /// Only third-party apps carry a team identifier. Apple signs its own apps with
+    /// the "Software Signing" authority and no TeamIdentifier, and those are exactly
+    /// the apps this tool cannot remove anyway.
+    func testSignatureEnrichmentYieldsTeamAndVendorForThirdPartyApps() throws {
         let scanner = AppScanner()
-        let apps = scanner.installedApps()
-        // Safari is present on every Mac and is always signed.
-        guard let target = apps.first(where: { $0.bundleID?.hasPrefix("com.apple.") == true })
-                ?? apps.first else {
-            throw XCTSkip("No applications available")
+        let apps = scanner.installedApps().filter {
+            $0.isRemovable && $0.bundleID?.hasPrefix("com.apple.") == false
         }
+        try XCTSkipIf(apps.isEmpty, "No third-party applications installed")
 
-        let enriched = scanner.enrichWithSignature(target)
-        XCTAssertNotNil(
-            enriched.teamID ?? enriched.signingOrganization,
-            "A signed app should yield a team identifier or an organisation"
+        let enriched = apps.prefix(5).map(scanner.enrichWithSignature)
+        XCTAssertTrue(
+            enriched.contains { $0.teamID != nil || $0.signingOrganization != nil },
+            "A Developer ID signed app should yield a team identifier or an organisation"
         )
     }
 
@@ -40,7 +41,9 @@ final class RealSystemSmokeTests: XCTestCase {
     /// must not balloon into hundreds of items for one app.
     func testScanningRealAppsStaysBoundedAndSafe() async throws {
         let scanner = AppScanner()
-        let apps = scanner.installedApps().filter { $0.bundleID?.hasPrefix("com.apple.") == false }
+        let apps = scanner.installedApps().filter {
+            $0.isRemovable && $0.bundleID?.hasPrefix("com.apple.") == false
+        }
         try XCTSkipIf(apps.isEmpty, "No third-party applications installed")
 
         for app in apps.prefix(5) {
@@ -63,10 +66,13 @@ final class RealSystemSmokeTests: XCTestCase {
         }
     }
 
-    /// The app's own bundle must always be found, otherwise the core promise fails.
+    /// A removable app's own bundle must always be found, otherwise the core promise
+    /// fails. Protected system apps are deliberately excluded and covered separately.
     func testScanAlwaysIncludesTheApplicationBundle() async throws {
         let scanner = AppScanner()
-        guard let app = scanner.installedApps().first else { throw XCTSkip("No applications") }
+        guard let app = scanner.installedApps().first(where: \.isRemovable) else {
+            throw XCTSkip("No removable applications")
+        }
 
         let result = await LeftoverScanner(options: .init(measureSizes: false)).scan(for: app)
         XCTAssertTrue(

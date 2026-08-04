@@ -22,10 +22,19 @@ public struct Matcher: Sendable {
         "notes", "music", "mail", "photos", "calendar", "contacts", "reminders",
         "safari", "finder", "system", "library", "desktop", "documents", "downloads",
         "installer", "setup", "launcher", "core", "main", "base", "framework",
+        // Not a vendor folder in any useful sense; it would match system-wide data.
+        "apple",
     ]
 
     /// Apple-owned prefixes we never attribute to a third-party app.
     static let appleReservedPrefixes = ["com.apple.", "group.com.apple."]
+
+    /// Namespaces too broad to be evidence of any single app.
+    ///
+    /// `com.apple` is the operating system, not a vendor. Scanning Safari
+    /// (`com.apple.Safari`) would otherwise treat every `com.apple.*` file as a
+    /// sibling and propose deleting Spotlight's and the Dock's data along with it.
+    static let overlyBroadPrefixes: Set<String> = ["com.apple", "group.com.apple"]
 
     /// True for files owned by macOS itself.
     ///
@@ -76,8 +85,10 @@ public struct Matcher: Sendable {
 
         // 2. A sibling identifier under the same reverse-DNS prefix. This finds
         //    shared updaters such as com.google.Keystone.Agent, which belong to
-        //    the vendor but may be used by their other apps too.
+        //    the vendor but may be used by their other apps too. Skipped for
+        //    namespaces that cover far more than one vendor's products.
         if let prefix = identity.reverseDNSPrefix?.lowercased(),
+           !Self.overlyBroadPrefixes.contains(prefix),
            loweredStem.hasPrefix(prefix + ".") {
             return Match(
                 confidence: .likely,

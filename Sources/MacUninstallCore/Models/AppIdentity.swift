@@ -107,6 +107,15 @@ public extension AppIdentity {
         return names.filter { $0.count >= 3 }
     }
 
+    /// False for apps macOS protects: Apple's own apps under `/System`, and anything
+    /// reached through a symlink into a cryptex such as Safari.
+    ///
+    /// Their leftovers are still ordinary files the user may want to clear, but the
+    /// bundle itself cannot be removed, so the UI must not offer to. This defers to
+    /// ``ProtectedPaths`` rather than pattern-matching paths, so there is one source of
+    /// truth for what is untouchable.
+    var isRemovable: Bool { ProtectedPaths.isSafeToRemove(bundleURL) }
+
     /// Every identifier that, seen as a file or folder name, is near-certain
     /// evidence of this specific app.
     var strongIdentifiers: Set<String> {

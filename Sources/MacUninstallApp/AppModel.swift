@@ -45,6 +45,13 @@ final class AppModel {
         }
     }
 
+    /// Apps the user installed, which this app can actually remove.
+    var removableApps: [AppIdentity] { filteredApps.filter(\.isRemovable) }
+
+    /// Apps macOS ships and protects. Shown so the list matches Finder, but their
+    /// bundles cannot be removed.
+    var systemApps: [AppIdentity] { filteredApps.filter { !$0.isRemovable } }
+
     var selectedLeftovers: [Leftover] {
         scanResult?.leftovers.filter { selectedPaths.contains($0.id) } ?? []
     }

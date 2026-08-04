@@ -5,13 +5,33 @@ public struct AppScanner: Sendable {
 
     public init() {}
 
+    /// One place apps are installed, and how deep to look inside it.
+    public struct SearchRoot: Sendable {
+        public var url: URL
+        /// How many levels of non-app subfolders to descend. Vendors group their
+        /// products into folders — `~/Applications/CrossOver/Steam`, Chrome's web-app
+        /// folder, `/Applications/Adobe …` — and those apps are installed just the
+        /// same. System roots stay flat because Apple does not nest there.
+        public var depth: Int
+
+        public init(_ url: URL, depth: Int = 0) {
+            self.url = url
+            self.depth = depth
+        }
+    }
+
     /// Directories searched for `.app` bundles, in the order users expect them.
-    public static var searchRoots: [URL] {
+    public static var searchRoots: [SearchRoot] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: "/Applications/Utilities"),
-            home.appending(path: "Applications"),
+            .init(URL(fileURLWithPath: "/Applications"), depth: 2),
+            .init(home.appending(path: "Applications"), depth: 2),
+            .init(URL(fileURLWithPath: "/Applications/Utilities"), depth: 1),
+            // Apple's own apps live here on modern macOS. They cannot be removed, but
+            // leaving them out makes the list look broken to anyone who expects Mail
+            // and Safari to be present; ``AppIdentity/isRemovable`` marks them instead.
+            .init(URL(fileURLWithPath: "/System/Applications")),
+            .init(URL(fileURLWithPath: "/System/Applications/Utilities")),
         ]
     }
 
@@ -21,29 +41,55 @@ public struct AppScanner: Sendable {
     /// bundle and is only needed once the user picks a target. Call
     /// ``enrichWithSignature(_:)`` at that point.
     public func installedApps() -> [AppIdentity] {
-        let fm = FileManager.default
+        installedApps(in: Self.searchRoots)
+    }
+
+    /// Enumerates apps under explicit roots, so discovery can be tested against a
+    /// temporary tree rather than whatever happens to be installed on the machine.
+    public func installedApps(in roots: [SearchRoot]) -> [AppIdentity] {
         var seen: Set<String> = []
         var results: [AppIdentity] = []
 
-        for root in Self.searchRoots {
-            guard let entries = try? fm.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isApplicationKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
+        for root in roots {
+            collectApps(in: root.url, depth: root.depth, seen: &seen, into: &results)
+        }
 
-            for entry in entries where entry.pathExtension == "app" {
+        return results.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    private func collectApps(
+        in directory: URL,
+        depth: Int,
+        seen: inout Set<String>,
+        into results: inout [AppIdentity]
+    ) {
+        let fm = FileManager.default
+        // `.skipsHiddenFiles` cannot be used here: macOS marks /Applications/Safari.app
+        // hidden because it is a symlink into the Safari cryptex, so that option
+        // silently drops Safari from the list. Dot-files are filtered by name instead.
+        guard let entries = try? fm.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else { return }
+
+        for entry in entries where !entry.lastPathComponent.hasPrefix(".") {
+            if entry.pathExtension == "app" {
                 let path = entry.standardizedFileURL.path
                 guard !seen.contains(path) else { continue }
                 seen.insert(path)
                 if let identity = readIdentity(at: entry) {
                     results.append(identity)
                 }
+                continue
             }
-        }
 
-        return results.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            guard depth > 0 else { continue }
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDirectory else { continue }
+            collectApps(in: entry, depth: depth - 1, seen: &seen, into: &results)
         }
     }
 

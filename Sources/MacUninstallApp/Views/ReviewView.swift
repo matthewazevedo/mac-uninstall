@@ -51,6 +51,15 @@ struct ReviewView: View {
                 }
             }
 
+            if !result.identity.isRemovable {
+                Label(
+                    "\(result.identity.displayName) is a macOS system app, so the app itself cannot be removed. Its data below can still be cleared.",
+                    systemImage: "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             if result.isIncomplete {
                 Label(
                     "\(result.inaccessibleLocations.count) location(s) could not be read. This list may be incomplete.",
@@ -179,7 +188,10 @@ struct CategoryHeader: View {
                 .padding(.vertical, 1)
                 .background(.quaternary, in: Capsule())
             Spacer()
-            Text(items.compactMap(\.sizeBytes).reduce(0, +).formattedBytes)
+            // "Zero KB" would claim a measurement that has not happened yet.
+            Text(items.contains { $0.sizeBytes != nil }
+                 ? items.compactMap(\.sizeBytes).reduce(0, +).formattedBytes
+                 : "—")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

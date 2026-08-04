@@ -171,3 +171,66 @@ final class MatcherTests: XCTestCase {
         XCTAssertTrue(acme(organization: "Anthropic PBC").vendorNames.contains("Anthropic"))
     }
 }
+
+extension MatcherTests {
+
+    /// Scanning one of Apple's own apps must not sweep in the rest of macOS.
+    ///
+    /// `com.apple.Safari` yields the reverse-DNS prefix `com.apple`, which would
+    /// otherwise match every system file on the machine — a real scan produced 1,899
+    /// items including Spotlight's and the Dock's data.
+    func testAppleAppDoesNotClaimUnrelatedSystemFiles() {
+        let safari = AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/Safari.app"),
+            bundleID: "com.apple.Safari",
+            displayName: "Safari",
+            executableName: "Safari",
+            signingOrganization: "Apple Inc."
+        )
+        let matcher = Matcher(identity: safari)
+
+        for name in [
+            "com.apple.spotlight", "com.apple.wallpaper", "com.apple.dock.plist",
+            "com.apple.sharedfilelist", "com.apple.shazamd", "group.com.apple.notes",
+        ] {
+            XCTAssertNil(
+                matcher.match(name: name, isDirectory: true),
+                "\(name) belongs to macOS, not to Safari"
+            )
+        }
+    }
+
+    /// Its own files are still found by exact and dotted-child identifier match.
+    func testAppleAppStillMatchesItsOwnFiles() {
+        let safari = AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/Safari.app"),
+            bundleID: "com.apple.Safari",
+            displayName: "Safari",
+            executableName: "Safari"
+        )
+        let matcher = Matcher(identity: safari)
+
+        XCTAssertEqual(matcher.match(name: "com.apple.Safari.plist", isDirectory: false)?.confidence, .certain)
+        XCTAssertEqual(matcher.match(name: "com.apple.Safari.SandboxBroker", isDirectory: true)?.confidence, .certain)
+
+        // A bare "Safari" folder is deliberately NOT matched. Common product names are
+        // treated as indistinctive so that a third-party app called Notes or Mail
+        // cannot claim an unrelated folder of the same name. The cost is that
+        // ~/Library/Safari is missed for Apple's Safari, which cannot be uninstalled
+        // anyway — a trade made in favour of never over-matching.
+        XCTAssertNil(matcher.match(name: "Safari", isDirectory: true))
+    }
+
+    /// A genuine vendor namespace must keep working.
+    func testNarrowVendorPrefixesStillMatchSiblings() {
+        let chrome = AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/Chrome.app"),
+            bundleID: "com.google.Chrome",
+            displayName: "Chrome"
+        )
+        XCTAssertEqual(
+            Matcher(identity: chrome).match(name: "com.google.Keystone.Agent", isDirectory: true)?.confidence,
+            .likely
+        )
+    }
+}
