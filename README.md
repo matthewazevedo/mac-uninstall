@@ -17,10 +17,12 @@ and a sandboxed uninstaller cannot honestly claim to be thorough.
 Scripts/build-app.sh release
 ```
 
-The signed bundle is staged at `~/Library/Caches/MacUninstall/build/MacUninstall.app`,
-with a copy in `dist/` for convenience. It is assembled outside the repository because
-this checkout lives in an iCloud-synced folder, and the file provider re-attaches a
-`com.apple.FinderInfo` xattr that `codesign` refuses to seal.
+The signed bundle lands in `dist/MacUninstall.app`.
+
+**Keep this repository out of iCloud Drive or any syncing folder.** A file provider
+re-attaches a `com.apple.FinderInfo` xattr within seconds of each write, and `codesign`
+refuses to seal a bundle carrying one, so builds fail strict verification no matter how
+often the xattr is stripped. Sync can also revert uncommitted edits without warning.
 
 **Install it to `/Applications` to use the privileged helper.** launchd only resolves a
 bundled daemon for apps in Applications; anywhere else, `SMAppService` reports the

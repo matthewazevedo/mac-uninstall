@@ -26,14 +26,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_ID="com.macuninstall.app"
 HELPER_ID="com.macuninstall.helper"
 APP_NAME="MacUninstall"
-DIST="$ROOT/dist"
-
-# The bundle is assembled and signed outside the repository on purpose. This checkout
-# lives in an iCloud-synced folder, and the file provider re-attaches a
-# com.apple.FinderInfo xattr within seconds — which codesign refuses to seal, so a
-# bundle signed in place fails strict verification no matter how often it is stripped.
-# The staged copy is authoritative; dist/ gets a copy for convenience.
-BUILD_ROOT="${MACUNINSTALL_BUILD_DIR:-$HOME/Library/Caches/MacUninstall/build}"
+# Keep the repository off any file-syncing service. A provider such as iCloud Drive
+# re-attaches a com.apple.FinderInfo xattr within seconds of each write, and codesign
+# refuses to seal a bundle carrying one — so a build inside a synced folder fails
+# strict verification no matter how often the xattr is stripped.
+BUILD_ROOT="${MACUNINSTALL_BUILD_DIR:-$ROOT/dist}"
+DIST="$BUILD_ROOT"
 APP="$BUILD_ROOT/$APP_NAME.app"
 
 # ---------------------------------------------------------------- identity ----
@@ -187,20 +185,8 @@ codesign --verify --strict --verbose=2 "$APP/Contents/MacOS/$HELPER_ID" 2>&1 | s
 codesign --display --verbose=4 "$APP" 2>&1 | grep -q "Sealed Resources" \
     || echo "    warning: no sealed resources reported"
 
-echo "==> Copying to dist/ for convenience"
-mkdir -p "$DIST"
-rm -rf "$DIST/$APP_NAME.app"
-ditto "$APP" "$DIST/$APP_NAME.app"
-xattr -cr "$DIST/$APP_NAME.app" 2>/dev/null || true
-if ! codesign --verify --strict "$DIST/$APP_NAME.app" 2>/dev/null; then
-    echo "    note: the dist/ copy does not pass strict verification because iCloud"
-    echo "          re-attaches metadata to it. Distribute the staged build instead:"
-    echo "          $APP"
-fi
-
 echo
 echo "Built $APP"
-echo "  copy: $DIST/$APP_NAME.app"
 echo "Team: ${TEAM_ID:-none}"
 echo
 

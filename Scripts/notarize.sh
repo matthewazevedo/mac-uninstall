@@ -18,9 +18,9 @@ set -euo pipefail
 PROFILE="${1:-MacUninstall}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="MacUninstall"
-BUILD_ROOT="${MACUNINSTALL_BUILD_DIR:-$HOME/Library/Caches/MacUninstall/build}"
+BUILD_ROOT="${MACUNINSTALL_BUILD_DIR:-$ROOT/dist}"
 APP="$BUILD_ROOT/$APP_NAME.app"
-DIST="$ROOT/dist"
+DIST="$BUILD_ROOT"
 DMG="$BUILD_ROOT/$APP_NAME.dmg"
 
 if [ ! -d "$APP" ]; then
@@ -95,9 +95,6 @@ xcrun stapler staple "$APP" | sed 's/^/    /'
 echo "==> Verifying Gatekeeper acceptance"
 spctl --assess --type execute --verbose=2 "$APP" 2>&1 | sed 's/^/    /'
 
-mkdir -p "$DIST"
-cp "$DMG" "$DIST/$APP_NAME.dmg"
-
 echo
 echo "Notarised and stapled."
-echo "  $DIST/$APP_NAME.dmg"
+echo "  $DMG"
