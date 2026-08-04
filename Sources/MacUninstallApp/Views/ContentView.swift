@@ -103,21 +103,35 @@ struct EmptyStateView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "sparkles.rectangle.stack")
-                .font(.system(size: 52, weight: .light))
-                .foregroundStyle(.tint)
+            RoundedRectangle(cornerRadius: 11)
+                .strokeBorder(DS.Palette.checkboxBorder, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                .frame(width: 46, height: 46)
             Text("Remove an app completely")
-                .font(.title2.weight(.semibold))
+                .font(DS.TypeScale.screenTitle)
+                .tracking(DS.Tracking.screenTitle)
             Text("Drag an app here, or pick one from the list.\nYou will see everything it left behind before anything is removed.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                .font(DS.TypeScale.control)
+                .foregroundStyle(DS.Palette.textSecondary)
                 .multilineTextAlignment(.center)
 
             if model.fullDiskAccess == .granted {
-                Label("Full Disk Access granted — all locations are visible.", systemImage: "checkmark.shield.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.green)
-                    .padding(.top, 6)
+                HStack(spacing: DS.Space.insideRow + 2) {
+                    Circle().fill(DS.Palette.certain).frame(width: 8, height: 8)
+                    Text("Full Disk Access granted — all locations are visible.")
+                        .font(DS.TypeScale.secondary)
+                        .foregroundStyle(DS.Palette.certainLabel)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    DS.Palette.certain.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: DS.Radius.inlineContainer)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.inlineContainer)
+                        .stroke(DS.Palette.certain.opacity(0.26))
+                )
+                .padding(.top, DS.Space.insideRow)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,9 +153,16 @@ struct ProgressPanel: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ProgressView().controlSize(.large)
-            Text(title).font(.title3.weight(.medium))
-            Text(subtitle).font(.callout).foregroundStyle(.secondary)
+            Text(title)
+                .font(DS.TypeScale.bodyEmphasis)
+                .foregroundStyle(DS.Palette.textPrimary)
+            ProgressView()
+                .progressViewStyle(.linear)
+                .tint(DS.Palette.accent)
+                .frame(width: 260)
+            Text(subtitle)
+                .font(DS.TypeScale.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -154,22 +175,23 @@ struct FullDiskAccessBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.shield.fill")
-                .foregroundStyle(.orange)
-                .font(.title3)
+            Circle()
+                .fill(DS.Palette.needsReview)
+                .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Full Disk Access is off").font(.callout.weight(.semibold))
+                Text("Full Disk Access is off").font(DS.TypeScale.bannerTitle)
                 Text("Some folders will read as empty, so leftovers can be missed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DS.TypeScale.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             Spacer()
             Button("Open Settings") { model.openFullDiskAccessSettings() }
             Button("Re-check") { model.refreshPermissions() }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.orange.opacity(0.12))
+        .buttonStyle(QuietButtonStyle(small: true))
+        .padding(.horizontal, DS.Space.pane)
+        .padding(.vertical, DS.Space.control)
+        .background(DS.Palette.needsReview.opacity(0.10))
         .overlay(alignment: .bottom) { Divider() }
     }
 }

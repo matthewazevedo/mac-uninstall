@@ -2,6 +2,14 @@ import AppKit
 import MacUninstallCore
 import SwiftUI
 
+/// Row styling here is deliberately left as it was rather than moved onto the design
+/// system's 26pt icon and mono version line.
+///
+/// Those metrics make each row about 5pt taller, which pushes the list past its
+/// viewport — and a sidebar `List` in that state reproducibly opens anchored to the
+/// bottom, leaving the user's own apps scrolled off above the macOS ones. Verified by
+/// changing nothing but the icon size and fonts. The review screen, where the spec
+/// actually matters, is on-spec.
 struct AppListSidebar: View {
     @Environment(AppModel.self) private var model
 

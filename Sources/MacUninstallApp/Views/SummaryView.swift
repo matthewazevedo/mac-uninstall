@@ -18,7 +18,7 @@ struct SummaryView: View {
                         section(
                             title: "Could not be removed",
                             systemImage: "exclamationmark.triangle.fill",
-                            tint: .orange,
+                            tint: DS.Palette.needsReview,
                             outcomes: report.failed
                         )
                     }
@@ -26,7 +26,7 @@ struct SummaryView: View {
                     section(
                         title: "Removed",
                         systemImage: "checkmark.circle.fill",
-                        tint: .green,
+                        tint: DS.Palette.certain,
                         outcomes: report.succeeded
                     )
 
@@ -45,8 +45,10 @@ struct SummaryView: View {
                         FileManager.default.homeDirectoryForCurrentUser.appending(path: ".Trash")
                     )
                 }
+                .buttonStyle(QuietButtonStyle())
                 Spacer()
                 Button("Done") { model.startOver() }
+                    .buttonStyle(AccentButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
             .padding(16)
@@ -55,15 +57,16 @@ struct SummaryView: View {
 
     private var banner: some View {
         HStack(spacing: 12) {
-            Image(systemName: report.isFullSuccess ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(report.isFullSuccess ? .green : .orange)
+            Circle()
+                .fill(report.isFullSuccess ? DS.Palette.certain : DS.Palette.needsReview)
+                .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 3) {
                 Text(report.isFullSuccess ? "\(appName) removed" : "\(appName) partially removed")
-                    .font(.title2.weight(.semibold))
+                    .font(DS.TypeScale.summaryTitle)
+                    .tracking(DS.Tracking.summaryTitle)
                 Text("\(report.succeeded.count) of \(report.outcomes.count) items handled.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(DS.TypeScale.control)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
             Spacer()
         }
@@ -76,19 +79,23 @@ struct SummaryView: View {
         outcomes: [RemovalOutcome]
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-                .foregroundStyle(tint)
+            HStack(spacing: DS.Space.insideRow) {
+                Circle().fill(tint).frame(width: 8, height: 8)
+                Text(title).font(DS.TypeScale.categoryHeader)
+            }
 
             ForEach(outcomes) { outcome in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(outcome.url.path)
-                        .font(.caption.monospaced())
+                        .font(DS.TypeScale.mono)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
                     if let message = outcome.message {
-                        Text(message).font(.caption2).foregroundStyle(.secondary)
+                        Text(message)
+                            .font(DS.TypeScale.secondary)
+                            .foregroundStyle(DS.Palette.textTertiary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -98,28 +105,28 @@ struct SummaryView: View {
 
     private func quarantineNote(_ directory: URL) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("System files are recoverable", systemImage: "arrow.uturn.backward.circle.fill")
-                .font(.headline)
+            Text("System files are recoverable").font(DS.TypeScale.bannerTitle)
             Text("""
                 Items that needed administrator rights were moved here rather than deleted, \
                 alongside a MANIFEST.txt listing their original paths. Delete this folder once \
                 you are satisfied nothing broke.
                 """)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DS.TypeScale.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             HStack {
                 Text(directory.path)
-                    .font(.caption.monospaced())
+                    .font(DS.TypeScale.monoSmall)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                 Button("Reveal") {
                     NSWorkspace.shared.activateFileViewerSelecting([directory])
                 }
-                .controlSize(.small)
+                .buttonStyle(QuietButtonStyle(small: true))
             }
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .padding(DS.Space.control)
+        .background(DS.Palette.quarantineFill, in: RoundedRectangle(cornerRadius: 8))
     }
 }

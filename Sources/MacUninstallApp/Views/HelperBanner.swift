@@ -17,53 +17,32 @@ struct HelperBanner: View {
 
     var body: some View {
         if model.helperStatus != .enabled {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .foregroundStyle(tint)
-                    .font(.title3)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.callout.weight(.semibold))
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                if model.helperStatus == .notRegistered {
-                    Button("Install") { model.installHelper() }
-                } else if model.helperStatus == .needsInstallInApplications {
-                    Button("Reveal") { model.revealApp() }
-                } else {
-                    if model.helperStatus == .requiresApproval {
-                        Button("Open Login Items") { model.openHelperSettings() }
+            NoticeBanner(tint: tint, title: title, detail: detail) {
+                HStack(spacing: DS.Space.insideRow) {
+                    if model.helperStatus == .notRegistered {
+                        Button("Install") { model.installHelper() }
+                    } else if model.helperStatus == .needsInstallInApplications {
+                        Button("Reveal") { model.revealApp() }
+                    } else {
+                        if model.helperStatus == .requiresApproval {
+                            Button("Open Login Items") { model.openHelperSettings() }
+                        }
+                        Button("Re-check") { model.refreshHelperStatus() }
                     }
-                    Button("Re-check") { model.refreshHelperStatus() }
                 }
+                .buttonStyle(QuietButtonStyle(small: true))
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(tint.opacity(0.10))
-            .overlay(alignment: .bottom) { Divider() }
-        }
-    }
-
-    private var icon: String {
-        switch model.helperStatus {
-        case .requiresApproval: "person.badge.shield.checkmark"
-        case .notRegistered: "bolt.badge.clock"
-        case .needsInstallInApplications: "folder.badge.plus"
-        default: "exclamationmark.triangle"
+            .padding(.horizontal, DS.Space.pane)
+            .padding(.top, DS.Space.insideRow)
         }
     }
 
     private var tint: Color {
         switch model.helperStatus {
-        case .requiresApproval: .blue
-        case .notRegistered: .secondary
-        case .needsInstallInApplications: .blue
-        default: .orange
+        case .requiresApproval: DS.Palette.accent
+        case .notRegistered: DS.Palette.textTertiary
+        case .needsInstallInApplications: DS.Palette.accent
+        default: DS.Palette.needsReview
         }
     }
 

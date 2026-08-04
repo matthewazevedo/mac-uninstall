@@ -35,19 +35,22 @@ struct ReviewView: View {
             HStack(spacing: 12) {
                 AppIcon(url: result.identity.bundleURL, size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(result.identity.displayName).font(.title2.weight(.semibold))
+                    Text(result.identity.displayName)
+                        .font(DS.TypeScale.screenTitle)
+                        .tracking(DS.Tracking.screenTitle)
+                    // Identifiers are what the filesystem wrote, so they are set in mono.
                     Text(result.identity.bundleID ?? result.identity.bundleURL.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(DS.TypeScale.mono)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .textSelection(.enabled)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(result.leftovers.count) items")
-                        .font(.callout.weight(.medium))
+                        .font(DS.TypeScale.bodyEmphasis)
                     Text(result.isMeasuringSizes ? "Measuring…" : result.totalSizeBytes.formattedBytes)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(DS.TypeScale.mono)
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
 
@@ -65,17 +68,17 @@ struct ReviewView: View {
                     "\(result.inaccessibleLocations.count) location(s) could not be read. This list may be incomplete.",
                     systemImage: "eye.trianglebadge.exclamationmark"
                 )
-                .font(.caption)
-                .foregroundStyle(.orange)
+                .font(DS.TypeScale.secondary)
+                .foregroundStyle(DS.Palette.needsReview)
             }
 
             HStack(spacing: 8) {
                 Button("Select all") { model.selectAll() }
                 Button("Only certain matches") { model.selectCertainOnly() }
                 Spacer()
-                Button("Cancel", role: .cancel) { model.startOver() }
+                Button("Cancel") { model.startOver() }
             }
-            .controlSize(.small)
+            .buttonStyle(QuietButtonStyle(small: true))
         }
         .padding(16)
     }
@@ -105,10 +108,10 @@ struct ReviewView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(selectionSummary)
-                    .font(.callout.weight(.medium))
+                    .font(DS.TypeScale.bodyEmphasis)
                 Text(reversibilityNote)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DS.TypeScale.secondary)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
 
             Spacer()
@@ -118,11 +121,12 @@ struct ReviewView: View {
                     model.privilegedWorkUsesHelper ? "Uses the background helper" : "Needs your password",
                     systemImage: model.privilegedWorkUsesHelper ? "checkmark.shield.fill" : "lock.fill"
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DS.TypeScale.secondary)
+                .foregroundStyle(DS.Palette.textSecondary)
             }
 
             Button("Remove Selected") { showConfirmation = true }
+                .buttonStyle(AccentButtonStyle())
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.selectedLeftovers.isEmpty)
         }
@@ -132,7 +136,8 @@ struct ReviewView: View {
             isPresented: $showConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Remove", role: .destructive) { model.performRemoval() }
+            // Not destructive: nothing is erased, and a red button would say otherwise.
+            Button("Remove") { model.performRemoval() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(confirmationMessage)
@@ -181,23 +186,24 @@ struct CategoryHeader: View {
             .labelsHidden()
             .toggleStyle(.checkbox)
 
-            Text(category.rawValue).font(.subheadline.weight(.semibold))
+            Text(category.rawValue).font(DS.TypeScale.categoryHeader)
             Text("\(items.count)")
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 6)
+                .font(DS.TypeScale.monoSmall)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .padding(.horizontal, 7)
                 .padding(.vertical, 1)
-                .background(.quaternary, in: Capsule())
+                .background(DS.Palette.hairline, in: Capsule())
             Spacer()
             // "Zero KB" would claim a measurement that has not happened yet.
             Text(items.contains { $0.sizeBytes != nil }
                  ? items.compactMap(\.sizeBytes).reduce(0, +).formattedBytes
                  : "—")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(DS.TypeScale.monoSmall)
+                .foregroundStyle(DS.Palette.textSecondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
-        .background(.bar)
+        .padding(.horizontal, DS.Space.pane)
+        .padding(.vertical, DS.Metric.categoryHeaderVerticalPadding)
+        .background(DS.Palette.bar)
     }
 }
 
@@ -220,37 +226,38 @@ struct LeftoverRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(leftover.url.lastPathComponent)
-                        .font(.callout)
+                        .font(DS.TypeScale.rowTitle)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     ConfidenceBadge(confidence: leftover.confidence)
                     if leftover.requiresAdmin {
-                        Image(systemName: "lock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        // The only other row ornament.
+                        Image(systemName: "lock")
+                            .font(DS.TypeScale.monoSmall)
+                            .foregroundStyle(DS.Palette.textTertiary)
                     }
                 }
 
                 Text(leftover.url.deletingLastPathComponent().path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(DS.TypeScale.mono)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.head)
 
                 Text(leftover.reason)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(DS.TypeScale.secondary)
+                    .foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 8)
 
             Text(leftover.sizeBytes?.formattedBytes ?? "—")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .font(DS.TypeScale.mono)
+                .foregroundStyle(DS.Palette.textSecondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
+        .padding(.horizontal, DS.Space.pane)
+        .padding(.vertical, DS.Metric.rowVerticalPadding)
         .contentShape(.rect)
         .onTapGesture { model.toggle(leftover) }
         .contextMenu {
@@ -260,26 +267,5 @@ struct LeftoverRow: View {
                 NSPasteboard.general.setString(leftover.url.path, forType: .string)
             }
         }
-    }
-}
-
-struct ConfidenceBadge: View {
-    let confidence: Confidence
-
-    private var color: Color {
-        switch confidence {
-        case .certain: .green
-        case .likely: .blue
-        case .possible: .orange
-        }
-    }
-
-    var body: some View {
-        Text(confidence.label)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
     }
 }
