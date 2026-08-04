@@ -79,3 +79,32 @@ final class HelperValidationTests: XCTestCase {
         }
     }
 }
+
+extension HelperValidationTests {
+
+    /// Ownership is repaired from the top of the quarantine area down, because the
+    /// daemon creates the intermediate folders too — and anything it creates as root
+    /// inside a user's Library is unreadable to that user.
+    func testQuarantineRootIsTheTopOfTheAppsOwnArea() {
+        let session = "/Users/someone/Library/Application Support/MacUninstall/Quarantine/2026-08-04T21-32-47Z"
+        XCTAssertEqual(
+            HelperValidation.quarantineRoot(containing: session),
+            "/Users/someone/Library/Application Support/MacUninstall"
+        )
+    }
+
+    /// It must never hand ownership of something outside the quarantine area.
+    func testQuarantineRootIsNilForUnacceptableDirectories() {
+        for directory in [
+            "/Users/someone/Library/Application Support/SomethingElse",
+            "/Library/Application Support/MacUninstall/Quarantine/x",
+            "/Users/someone/Library/Application Support/MacUninstall/Quarantine/../../../../..",
+            "/tmp/MacUninstall/Quarantine/x",
+        ] {
+            XCTAssertNil(
+                HelperValidation.quarantineRoot(containing: directory),
+                "\(directory) must not yield a root to chown"
+            )
+        }
+    }
+}

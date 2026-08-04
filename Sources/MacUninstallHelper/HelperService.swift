@@ -81,6 +81,12 @@ final class HelperService: NSObject, HelperProtocol, @unchecked Sendable {
         }
 
         writeManifest(paths: accepted.filter { failures[$0] == nil }, into: directory)
+
+        // Everything this daemon creates would otherwise belong to root, inside the
+        // user's own Library, at 0700 — unreadable even in Finder. That would make the
+        // promise that quarantined items are recoverable simply false.
+        handOwnershipToUser(ofTreeContaining: directory)
+
         reply(failures)
     }
 
@@ -107,6 +113,40 @@ final class HelperService: NSObject, HelperProtocol, @unchecked Sendable {
         } catch {
             reply(error.localizedDescription)
         }
+    }
+
+    /// Gives the whole quarantine tree back to the user who owns the home directory
+    /// it sits in, so they can open, inspect, and restore from it.
+    private func handOwnershipToUser(ofTreeContaining directory: String) {
+        let fm = FileManager.default
+        guard let root = HelperValidation.quarantineRoot(containing: directory),
+              let owner = Self.homeOwner(of: root) else { return }
+
+        var paths = [root]
+        if let enumerator = fm.enumerator(atPath: root) {
+            for case let relative as String in enumerator {
+                paths.append((root as NSString).appendingPathComponent(relative))
+            }
+        }
+
+        for path in paths {
+            try? fm.setAttributes(
+                [.ownerAccountID: owner.uid, .groupOwnerAccountID: owner.gid],
+                ofItemAtPath: path
+            )
+        }
+    }
+
+    /// Reads the owning user from the home directory the path sits under, rather than
+    /// trusting anything the client sent.
+    static func homeOwner(of path: String) -> (uid: NSNumber, gid: NSNumber)? {
+        let components = URL(fileURLWithPath: path).pathComponents
+        guard components.count > 2, components[1] == "Users" else { return nil }
+        let home = "/Users/" + components[2]
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: home),
+              let uid = attributes[.ownerAccountID] as? NSNumber,
+              let gid = attributes[.groupOwnerAccountID] as? NSNumber else { return nil }
+        return (uid, gid)
     }
 
     /// Records where each item came from, so a mistake can be undone by hand.

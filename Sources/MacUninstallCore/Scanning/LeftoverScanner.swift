@@ -62,7 +62,12 @@ public struct LeftoverScanner: Sendable {
                 category: .application,
                 confidence: .certain,
                 reason: "The application bundle itself.",
-                requiresAdmin: !fm.isWritableFile(atPath: identity.bundleURL.path)
+                // Removing an item needs write permission on its *parent*, not on the
+                // item. Testing the bundle sent read-only apps down the privileged
+                // path and quarantined them instead of trashing them.
+                requiresAdmin: !fm.isWritableFile(
+                    atPath: identity.bundleURL.deletingLastPathComponent().path
+                )
             ))
             claimed.insert(identity.bundleURL.standardizedFileURL.path)
         }

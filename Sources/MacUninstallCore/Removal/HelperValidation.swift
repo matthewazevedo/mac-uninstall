@@ -21,6 +21,17 @@ public enum HelperValidation {
         return !standardized.contains("/../") && !directory.contains("/../")
     }
 
+    /// The top of the app's quarantine area for a given session directory.
+    ///
+    /// The daemon fixes ownership from here down, so the folders it created implicitly
+    /// are handed back to the user too — not just the session folder.
+    public static func quarantineRoot(containing directory: String) -> String? {
+        let marker = "/Library/Application Support/MacUninstall"
+        guard isAcceptableQuarantineDirectory(directory),
+              let range = directory.range(of: marker) else { return nil }
+        return String(directory[directory.startIndex..<range.upperBound])
+    }
+
     /// Launchd labels are reverse-DNS style identifiers and nothing else.
     ///
     /// The label is concatenated into a launchd domain target, so anything exotic —
