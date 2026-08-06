@@ -50,6 +50,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version is derived from the nearest tag, and a shallow checkout has
+          # no tags to find — which silently yields 0.0.0, an appcast advertising a
+          # version older than the one already installed, and an update nobody is
+          # ever offered. Full history keeps CI and a local build in agreement.
+          fetch-depth: 0
 
       - name: Select the newest available Xcode
         # Swift 6 language mode needs Xcode 16 or later. Picking the highest installed
