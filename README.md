@@ -19,18 +19,61 @@ Then grant **Full Disk Access** in System Settings → Privacy & Security. Witho
 protected folders read as *empty* rather than erroring, so leftovers are silently
 missed — the app shows a warning banner rather than pretending the scan was complete.
 
+## Updating
+
+The app updates itself through [Sparkle](https://sparkle-project.org). It checks once a
+day and on **Mac Uninstall → Check for Updates…**, but never installs anything on its
+own: an app whose whole argument is that it shows you what it will delete before it
+deletes it should not replace itself without asking either.
+
+An update is only accepted if it is signed by the project's EdDSA key. The public half
+is compiled into the app (`SPARKLE_PUBLIC_KEY` in `Scripts/build-app.sh`); the private
+half lives in the maintainer's login keychain and in one CI secret. Serving a malicious
+feed is not enough to ship code — the signature is checked before anything is unpacked.
+
+The feed is `releases/latest/download/appcast.xml`. GitHub resolves that to whichever
+release is newest, so the URL baked into every copy of the app never changes while the
+file behind it does. **This requires the repository to be public**, since an installed
+copy fetches the feed and the disk image with no credentials.
+
+To rehearse the whole path against a local feed before shipping:
+
+```bash
+# Build the "new" version and sign an appcast for it, exactly as CI does.
+MACUNINSTALL_VERSION=0.2.0 Scripts/build-app.sh release && Scripts/make-dmg.sh
+mkdir -p /tmp/feed && cp dist/MacUninstall.dmg /tmp/feed/
+.build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+    --download-url-prefix "http://localhost:8137/" /tmp/feed
+(cd /tmp/feed && python3 -m http.server 8137 --bind 127.0.0.1) &
+
+# Build an older copy that looks at that feed, run it, and check for updates.
+MACUNINSTALL_VERSION=0.1.0 \
+MACUNINSTALL_FEED_URL="http://localhost:8137/appcast.xml" \
+MACUNINSTALL_BUILD_DIR=/tmp/old Scripts/build-app.sh release
+open /tmp/old/MacUninstall.app
+```
+
 ## Releasing
 
 Tag a version and the workflow in `.github/workflows/release.yml` builds, signs,
-notarises, staples, and publishes the disk image:
+notarises, staples, signs the appcast, and publishes the disk image and the feed:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-It needs five repository secrets — the certificate and Apple credentials — listed at
-the top of that workflow file. They are never committed; the signing certificate is
-imported into a throwaway keychain that lives for one job.
+The tag is the version. `Scripts/build-app.sh` derives `CFBundleShortVersionString` and
+`CFBundleVersion` from it, because Sparkle decides whether an update is newer by
+comparing `CFBundleVersion` — it has to be a plain dotted number that sorts correctly.
+A build ahead of the last tag becomes `0.1.0.<commits>`, which sorts above `0.1.0` and
+below `0.1.1`, so a development build never compares equal to the release it came from.
+
+It needs six repository secrets — the certificate, the Apple credentials, and the
+Sparkle signing key — listed at the top of that workflow file. They are never committed;
+the signing certificate is imported into a throwaway keychain that lives for one job.
+
+Losing the Sparkle private key means no existing install can ever be updated again, so
+keep a copy somewhere other than the keychain that holds it.
 
 ## Status
 
@@ -164,6 +207,7 @@ Sources/MacUninstallCore/     Pure Foundation; safe to link into a root process
   Support/      ProtectedPaths, PermissionChecker
 Sources/MacUninstallHelper/   The root daemon: XPC listener and privileged operations
 Sources/MacUninstallApp/      SwiftUI app, plus RunningAppGuard (the only AppKit user)
+  Updater.swift   Sparkle; linked by the app alone, never by the root daemon
 Tests/                        58 tests, incl. read-only smoke tests against this Mac
 ```
 

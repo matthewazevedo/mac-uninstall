@@ -18,6 +18,18 @@ name: Release
 #   APPLE_APP_PASSWORD      An app-specific password from appleid.apple.com —
 #                           never your real Apple ID password.
 #   APPLE_TEAM_ID           F57J2WBYN8
+#   SPARKLE_ED_PRIVATE_KEY  The private EdDSA key that signs updates, so an installed
+#                           copy can prove a new version came from you. It lives in the
+#                           login keychain, not in a file. Export it with:
+#                             .build/artifacts/sparkle/Sparkle/bin/generate_keys \
+#                                 -x sparkle-key.txt
+#                             gh secret set SPARKLE_ED_PRIVATE_KEY < sparkle-key.txt
+#                             rm sparkle-key.txt
+#                           -x takes a filename and nothing else: passing "-" writes a
+#                           file literally named "-" rather than to standard output.
+#                           The matching public key is baked into the app by
+#                           Scripts/build-app.sh. Losing this key means no existing
+#                           install can ever be updated again, so keep a copy.
 #
 # The certificate never touches the repository: it is imported into a throwaway
 # keychain that exists only for the length of one job.
@@ -96,6 +108,31 @@ jobs:
             --verbose=2 dist/MacUninstall.dmg
           xcrun stapler validate dist/MacUninstall.dmg
 
+      - name: Sign the appcast
+        # After stapling, never before: the EdDSA signature covers the bytes of the
+        # disk image, and stapling rewrites them. Signing first would publish a
+        # signature for a file that no longer exists, and every client would reject
+        # the update.
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # generate_appcast treats every archive in the directory it is handed as an
+          # update, so the image gets a directory to itself — dist/ also holds the
+          # unpacked .app, which is not one.
+          mkdir -p dist/appcast
+          cp dist/MacUninstall.dmg dist/appcast/
+          # The key arrives on stdin so it is never written to the runner's disk.
+          echo "$SPARKLE_ED_PRIVATE_KEY" | \
+            .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
+              --link "https://github.com/${{ github.repository }}" \
+              --full-release-notes-url "https://github.com/${{ github.repository }}/releases" \
+              dist/appcast
+          echo "--- appcast.xml ---"
+          cat dist/appcast/appcast.xml
+
       - name: Publish the release
         # Tags only. A manual run is a dry run: it proves the secrets, signing and
         # notarisation all work without creating a release named after the branch.
@@ -103,8 +140,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # appcast.xml ships as a release asset because SUFeedURL points at
+          # /releases/latest/download/appcast.xml, which GitHub resolves to whichever
+          # release is newest. The feed URL never changes; the file behind it does.
           gh release create "${{ github.ref_name }}" \
             dist/MacUninstall.dmg \
+            dist/appcast/appcast.xml \
             --title "${{ github.ref_name }}" \
             --generate-notes
 

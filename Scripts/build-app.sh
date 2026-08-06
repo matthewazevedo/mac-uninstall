@@ -24,6 +24,13 @@ set -euo pipefail
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_ID="com.macuninstall.app"
+# The public half of the Sparkle signing key. Safe to commit — it only lets a copy of
+# the app verify that an update came from the holder of the private key. Regenerate
+# both halves with Scripts/../.build/artifacts/sparkle/Sparkle/bin/generate_keys.
+SPARKLE_PUBLIC_KEY="19ffzcCYWRMyrDlBEsF4yTaCd/qmvvgYiQu/1QwD7Do="
+# Where the app looks for updates. Overridable so the whole update path can be
+# rehearsed against a local feed before a release goes out — see README.
+SPARKLE_FEED_URL="${MACUNINSTALL_FEED_URL:-https://github.com/matthewazevedo/mac-uninstall/releases/latest/download/appcast.xml}"
 HELPER_ID="com.macuninstall.helper"
 APP_NAME="MacUninstall"
 # Keep the repository off any file-syncing service. A provider such as iCloud Drive
@@ -70,18 +77,56 @@ swift build -c "$CONFIG" --package-path "$ROOT" --product "$APP_NAME"
 swift build -c "$CONFIG" --package-path "$ROOT" --product "$HELPER_ID"
 BIN_DIR="$(swift build -c "$CONFIG" --package-path "$ROOT" --show-bin-path)"
 
-VERSION="$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo "0.1.0")"
-SHORT_VERSION="0.1.0"
+# Both versions come from the git tag, because the tag is what the release workflow
+# ships and what the appcast advertises. Sparkle decides whether an update is newer by
+# comparing CFBundleVersion, so it has to be a plain dotted number that sorts
+# correctly — `git describe` output like "v0.1.0-3-gb7d101f" does not compare at all.
+#
+# Override with MACUNINSTALL_VERSION to build a specific version without tagging.
+if [ -n "${MACUNINSTALL_VERSION:-}" ]; then
+    SHORT_VERSION="${MACUNINSTALL_VERSION#v}"
+    VERSION="$SHORT_VERSION"
+else
+    TAG="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")"
+    SHORT_VERSION="${TAG#v}"
+    COMMITS_SINCE="$(git -C "$ROOT" rev-list "$TAG..HEAD" --count 2>/dev/null || echo 0)"
+    if [ "$COMMITS_SINCE" = "0" ]; then
+        VERSION="$SHORT_VERSION"
+    else
+        # A build ahead of the last tag must never compare equal to the release it
+        # came from, or Sparkle would treat a released update as "already installed".
+        # 0.1.0.3 sorts above 0.1.0 and below 0.1.1.
+        VERSION="$SHORT_VERSION.$COMMITS_SINCE"
+    fi
+fi
+
+echo "==> Version $SHORT_VERSION (build $VERSION)"
 
 echo "==> Assembling bundle"
 rm -rf "$APP"
 mkdir -p "$BUILD_ROOT"
 mkdir -p "$APP/Contents/MacOS" \
          "$APP/Contents/Resources" \
+         "$APP/Contents/Frameworks" \
          "$APP/Contents/Library/LaunchDaemons"
 
 cp "$BIN_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 cp "$BIN_DIR/$HELPER_ID" "$APP/Contents/MacOS/$HELPER_ID"
+
+# ------------------------------------------------------------------ sparkle ----
+
+# SwiftPM leaves Sparkle.framework beside the binaries but has no notion of an app
+# bundle, so embedding it is this script's job. -a preserves the version symlinks a
+# framework needs; a flat copy will not load.
+echo "==> Embedding Sparkle"
+cp -a "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/"
+
+# The executable is linked against @rpath/Sparkle.framework with only @loader_path on
+# its run-path list, which resolves to Contents/MacOS. The framework lives one level
+# up in Contents/Frameworks, so without this the app dies at launch with "Library not
+# loaded". Harmless if a future SwiftPM starts adding it, hence the || true.
+install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 
 echo "==> Drawing the app icon"
 # Generated rather than checked in, so the icon stays in step with the design
@@ -112,6 +157,24 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>Mac Uninstall needs administrator rights to move system-level leftovers, such as launch daemons and privileged helper tools, out of the way.</string>
     <key>NSSystemAdministrationUsageDescription</key>
     <string>Mac Uninstall removes files that applications leave behind in system folders.</string>
+
+    <!-- Updates. The feed is a release asset rather than a file in the repository or
+         a Pages site: GitHub resolves /releases/latest/download/<name> to the newest
+         release's asset of that name, so the URL is stable while each release
+         publishes its own appcast. Nothing extra to host, nothing to keep in sync. -->
+    <key>SUFeedURL</key>
+    <string>$SPARKLE_FEED_URL</string>
+    <!-- Updates are only trusted if signed by the matching private key, which lives
+         in the maintainer's keychain and in one CI secret. A compromised feed alone
+         cannot ship code: the signature is checked before anything is unpacked. -->
+    <key>SUPublicEDKey</key>
+    <string>$SPARKLE_PUBLIC_KEY</string>
+    <!-- Check on a schedule, but never install on its own. An app whose whole point
+         is that it deletes nothing without showing you first should not replace
+         itself without asking either. -->
+    <key>SUEnableAutomaticChecks</key>              <true/>
+    <key>SUAutomaticallyUpdate</key>                <false/>
+    <key>SUScheduledCheckInterval</key>             <integer>86400</integer>
 </dict>
 </plist>
 PLIST
@@ -174,6 +237,28 @@ PLIST
 # Copying through the filesystem can attach quarantine and Finder metadata, which
 # codesign refuses to seal. Strip it before signing rather than after.
 xattr -cr "$APP"
+
+# Sparkle ships its own nested code — two XPC services, the updater UI, and the
+# installer that runs after the app quits — each pre-signed by the Sparkle project.
+# Notarisation rejects anything inside the bundle that is not signed by us, so every
+# piece is re-signed here, innermost first. None of it gets the app's entitlements:
+# these are separate programs, and the Apple Events entitlement is the app's alone.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+
+echo "==> Signing Sparkle"
+for NESTED in \
+    "$SPARKLE/XPCServices/Downloader.xpc" \
+    "$SPARKLE/XPCServices/Installer.xpc" \
+    "$SPARKLE/Updater.app" \
+    "$SPARKLE/Autoupdate"
+do
+    codesign --force --options runtime --timestamp \
+        --sign "$IDENTITY" "$NESTED" 2>&1 | sed 's/^/    /'
+done
+
+# The framework itself is sealed last, so it covers the nested code just re-signed.
+codesign --force --options runtime --timestamp \
+    --sign "$IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework" 2>&1 | sed 's/^/    /'
 
 echo "==> Signing helper"
 codesign --force --options runtime --timestamp \

@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct MacUninstallApp: App {
     @State private var model = AppModel()
+    @State private var updater = UpdaterModel()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -16,6 +17,11 @@ struct MacUninstallApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // Directly under "About Mac Uninstall", where every Mac app puts it.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            }
         }
     }
 }

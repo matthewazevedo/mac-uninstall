@@ -9,6 +9,11 @@ let package = Package(
         .executable(name: "MacUninstall", targets: ["MacUninstallApp"]),
         .executable(name: "com.macuninstall.helper", targets: ["MacUninstallHelper"]),
     ],
+    dependencies: [
+        // Only the app links this. The helper runs as root and stays on pure
+        // Foundation, so nothing about updating reaches the privileged process.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.5"),
+    ],
     targets: [
         .target(
             name: "MacUninstallCore",
@@ -16,7 +21,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "MacUninstallApp",
-            dependencies: ["MacUninstallCore"],
+            dependencies: [
+                "MacUninstallCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // Runs as root under launchd, installed from inside the app bundle by
