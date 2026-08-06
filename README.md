@@ -85,8 +85,14 @@ The privileged helper is verified working on macOS 26: installed from `/Applicat
 registered via `SMAppService`, activated on demand by launchd as root, and reached over
 XPC with the code-signature pin enforced.
 
-Not yet notarised — that needs an app-specific password only you can supply. Until then
-`spctl` reports the app as `Unnotarized Developer ID`, so it will warn on other Macs.
+Released builds are signed with Developer ID, notarised and stapled by the release
+workflow, so they open on a Mac that has never seen them without a Gatekeeper warning.
+A local `Scripts/build-app.sh` build is signed but not notarised, which is fine on the
+machine that built it.
+
+Apple Silicon only. `swift build` produces a native binary, so the appcast advertises
+`arm64` and an Intel Mac is correctly never offered an update. Building universal would
+mean compiling both slices and `lipo`-ing them together in the bundle assembly.
 
 ## Build and run
 
@@ -208,7 +214,7 @@ Sources/MacUninstallCore/     Pure Foundation; safe to link into a root process
 Sources/MacUninstallHelper/   The root daemon: XPC listener and privileged operations
 Sources/MacUninstallApp/      SwiftUI app, plus RunningAppGuard (the only AppKit user)
   Updater.swift   Sparkle; linked by the app alone, never by the root daemon
-Tests/                        58 tests, incl. read-only smoke tests against this Mac
+Tests/                        76 tests, incl. read-only smoke tests against this Mac
 ```
 
 ## The privileged helper
