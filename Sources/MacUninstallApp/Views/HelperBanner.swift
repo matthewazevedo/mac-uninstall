@@ -26,6 +26,12 @@ struct HelperBanner: View {
                     } else {
                         if model.helperStatus == .requiresApproval {
                             Button("Open Login Items") { model.openHelperSettings() }
+                        } else {
+                            // The unavailable state is usually a daemon left behind by
+                            // an older version, which an app update produces whenever
+                            // the protocol version moves. Re-checking can only ever
+                            // confirm that; replacing the daemon is what clears it.
+                            Button("Reinstall") { model.reinstallHelper() }
                         }
                         Button("Re-check") { model.refreshHelperStatus() }
                     }

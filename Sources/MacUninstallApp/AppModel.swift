@@ -119,6 +119,23 @@ final class AppModel {
         }
     }
 
+    /// Replaces an installed daemon, rather than registering alongside it.
+    ///
+    /// The unregister step is the whole point. `register()` reports an already
+    /// registered job as success and returns without touching it, so a daemon left
+    /// behind by a previous version — which is what an app update produces whenever
+    /// the protocol version moves — would survive a plain reinstall and keep
+    /// answering with the wrong version. Tearing the old job down first is the only
+    /// thing that actually replaces it.
+    func reinstallHelper() {
+        Task {
+            // A failure here is not worth surfacing on its own: if the job was
+            // already gone, that is exactly the state registering wants.
+            try? await HelperClient.unregister()
+            installHelper()
+        }
+    }
+
     func openHelperSettings() {
         HelperClient.openApprovalSettings()
     }
