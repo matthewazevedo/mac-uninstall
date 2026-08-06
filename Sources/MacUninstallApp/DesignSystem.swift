@@ -284,10 +284,17 @@ struct NoticeBanner<Actions: View>: View {
                 Text(title)
                     .font(DS.TypeScale.bannerTitle)
                     .foregroundStyle(DS.Palette.textPrimary)
+                // Deliberately not `.fixedSize(horizontal: false, vertical: true)`.
+                // These banners sit in the detail column's plain VStack, which has no
+                // scroll view to absorb overflow. `fixedSize` makes the text refuse
+                // any proposed height, so the column demands more height than the
+                // window has and the whole split view is laid out past the top edge —
+                // the banner disappears under the title bar and the sidebar's rows go
+                // with it, looking like a list scrolled down that cannot be scrolled
+                // back up. Left to wrap normally, the text reports a height that fits.
                 Text(detail)
                     .font(DS.TypeScale.secondary)
                     .foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: DS.Space.insideRow)
