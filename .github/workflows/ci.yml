@@ -1,0 +1,48 @@
+name: CI
+
+# Builds and tests every branch and pull request.
+#
+# The safety rules in MacUninstallCore are the reason this project can be trusted to
+# delete things, and until this workflow existed they were only exercised by
+# release.yml — which needs a v* tag and a manual environment approval, so a change
+# could sit on a branch for days without ever being compiled. The strict-concurrency
+# break in b7d101f is what that costs: it built locally and only CI rejected it.
+
+on:
+  push:
+    # Branches only. A v* tag already runs the full release workflow, which runs
+    # these same tests before it signs anything.
+    branches: ["**"]
+  pull_request:
+
+# A second push supersedes the first; there is nothing to learn from finishing a
+# run against code that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Select the newest available Xcode
+        # Swift 6 language mode needs Xcode 16 or later. Picking the highest installed
+        # version avoids pinning to one the runner image may drop.
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Build every product
+        # The app and the helper are separate executables and only the library is
+        # covered by the tests, so building all three is what catches a break in the
+        # SwiftUI layer or in the daemon.
+        run: swift build --build-tests
+
+      - name: Run tests
+        run: swift test
