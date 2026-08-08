@@ -6,9 +6,9 @@ import Observation
 /// Drives the whole UI: which app is targeted, what was found, what is selected.
 @MainActor
 @Observable
-final class AppModel {
+public final class AppModel {
 
-    enum Phase: Equatable {
+    public enum Phase: Equatable {
         case idle
         case scanning(appName: String)
         case reviewing
@@ -18,16 +18,16 @@ final class AppModel {
 
     // MARK: - State
 
-    var phase: Phase = .idle
-    var installedApps: [AppIdentity] = []
-    var searchText: String = ""
-    var scanResult: ScanResult?
-    var selectedPaths: Set<String> = []
-    var report: RemovalReport?
-    var errorMessage: String?
-    var fullDiskAccess: PermissionChecker.Status = .indeterminate
-    var helperStatus: HelperClient.Status = .notRegistered
-    var isDropTargeted = false
+    public var phase: Phase = .idle
+    public var installedApps: [AppIdentity] = []
+    public var searchText: String = ""
+    public var scanResult: ScanResult?
+    public var selectedPaths: Set<String> = []
+    public var report: RemovalReport?
+    public var errorMessage: String?
+    public var fullDiskAccess: PermissionChecker.Status = .indeterminate
+    public var helperStatus: HelperClient.Status = .notRegistered
+    public var isDropTargeted = false
 
     private let scanner = AppScanner()
 
@@ -35,9 +35,11 @@ final class AppModel {
     /// rebuilt for every request.
     private let helper = HelperClient()
 
+    public init() {}
+
     // MARK: - Derived
 
-    var filteredApps: [AppIdentity] {
+    public var filteredApps: [AppIdentity] {
         guard !searchText.isEmpty else { return installedApps }
         return installedApps.filter {
             $0.displayName.localizedCaseInsensitiveContains(searchText)
@@ -46,38 +48,38 @@ final class AppModel {
     }
 
     /// Apps the user installed, which this app can actually remove.
-    var removableApps: [AppIdentity] { filteredApps.filter(\.isRemovable) }
+    public var removableApps: [AppIdentity] { filteredApps.filter(\.isRemovable) }
 
     /// Apps macOS ships and protects. Shown so the list matches Finder, but their
     /// bundles cannot be removed.
-    var systemApps: [AppIdentity] { filteredApps.filter { !$0.isRemovable } }
+    public var systemApps: [AppIdentity] { filteredApps.filter { !$0.isRemovable } }
 
-    var selectedLeftovers: [Leftover] {
+    public var selectedLeftovers: [Leftover] {
         scanResult?.leftovers.filter { selectedPaths.contains($0.id) } ?? []
     }
 
-    var selectedSizeBytes: Int64 {
+    public var selectedSizeBytes: Int64 {
         selectedLeftovers.compactMap(\.sizeBytes).reduce(0, +)
     }
 
     /// True when one of the selected items was too large to measure exactly, so the
     /// total is a floor and has to be shown as one.
-    var selectedSizeIsPartial: Bool {
+    public var selectedSizeIsPartial: Bool {
         selectedLeftovers.contains { $0.sizeIsPartial }
     }
 
-    var selectionNeedsAdmin: Bool {
+    public var selectionNeedsAdmin: Bool {
         selectedLeftovers.contains { $0.requiresAdmin }
     }
 
     /// True when the user has ticked something we deliberately did not pre-select.
-    var selectionIncludesUnreviewed: Bool {
+    public var selectionIncludesUnreviewed: Bool {
         selectedLeftovers.contains { $0.confidence != .certain }
     }
 
     // MARK: - Lifecycle
 
-    func onAppear() {
+    public func onAppear() {
         refreshPermissions()
         refreshHelperStatus()
         loadInstalledApps()
@@ -91,7 +93,7 @@ final class AppModel {
     /// handshake fails — a signature pin that no longer matches after re-signing, or a
     /// stale daemon from a previous build — the first sign of it would otherwise be a
     /// failed removal, which is the worst possible moment to find out.
-    func refreshHelperStatus() {
+    public func refreshHelperStatus() {
         helperStatus = HelperClient.status
         guard helperStatus == .enabled else { return }
 
@@ -111,7 +113,7 @@ final class AppModel {
 
     /// Registers the daemon. macOS then requires a one-time approval in Login Items,
     /// which is why the result is surfaced rather than assumed to be success.
-    func installHelper() {
+    public func installHelper() {
         helperStatus = HelperClient.register()
         switch helperStatus {
         case .requiresApproval:
@@ -133,7 +135,7 @@ final class AppModel {
     /// the protocol version moves — would survive a plain reinstall and keep
     /// answering with the wrong version. Tearing the old job down first is the only
     /// thing that actually replaces it.
-    func reinstallHelper() {
+    public func reinstallHelper() {
         Task {
             // A failure here is not worth surfacing on its own: if the job was
             // already gone, that is exactly the state registering wants.
@@ -142,26 +144,26 @@ final class AppModel {
         }
     }
 
-    func openHelperSettings() {
+    public func openHelperSettings() {
         HelperClient.openApprovalSettings()
     }
 
     /// Shows the app in Finder so the user can drag it to Applications.
-    func revealApp() {
+    public func revealApp() {
         NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
     }
 
-    func refreshPermissions() {
+    public func refreshPermissions() {
         fullDiskAccess = PermissionChecker.fullDiskAccessStatus()
     }
 
     /// True when the current selection would be handled by the daemon rather than a
     /// password prompt, so the UI can say which is about to happen.
-    var privilegedWorkUsesHelper: Bool {
+    public var privilegedWorkUsesHelper: Bool {
         selectionNeedsAdmin && helperStatus == .enabled
     }
 
-    func loadInstalledApps() {
+    public func loadInstalledApps() {
         let scanner = self.scanner
         Task {
             let apps = await Task.detached { scanner.installedApps() }.value
@@ -169,15 +171,15 @@ final class AppModel {
         }
     }
 
-    func openFullDiskAccessSettings() {
+    public func openFullDiskAccessSettings() {
         NSWorkspace.shared.open(PermissionChecker.fullDiskAccessSettingsURL)
     }
 
     // MARK: - Scanning
 
     /// Handles an app dropped onto the window.
-    func handleDrop(url: URL) {
-        guard url.pathExtension == "app" else {
+    public func handleDrop(url: URL) {
+        guard url.pathExtension.lowercased() == "app" else {
             errorMessage = "\(url.lastPathComponent) is not an application."
             return
         }
@@ -188,7 +190,7 @@ final class AppModel {
         scan(identity)
     }
 
-    func scan(_ identity: AppIdentity) {
+    public func scan(_ identity: AppIdentity) {
         errorMessage = nil
         report = nil
         phase = .scanning(appName: identity.displayName)
@@ -216,9 +218,6 @@ final class AppModel {
     }
 
     /// Fills in sizes after the list is already on screen.
-    ///
-    /// The result is discarded if the user has moved on to a different app, so a slow
-    /// measurement can never overwrite a newer scan.
     private func measureSizes(for result: ScanResult) {
         let leftovers = result.leftovers
         let scannedBundle = result.identity.bundleURL
@@ -227,27 +226,30 @@ final class AppModel {
             let measured = await Task.detached {
                 await LeftoverScanner().measureSizes(for: leftovers)
             }.value
-
-            guard var current = self.scanResult,
-                  current.identity.bundleURL == scannedBundle else { return }
-
-            let byID = Dictionary(
-                measured.map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            current.leftovers = current.leftovers.map { item in
-                var item = item
-                item.sizeBytes = byID[item.id]?.sizeBytes
-                item.sizeIsPartial = byID[item.id]?.sizeIsPartial ?? false
-                return item
-            }
-            self.scanResult = current
+            self.applyMeasuredSizes(measured, from: scannedBundle)
         }
+    }
+
+    /// Merges measured sizes into the current result.
+    ///
+    /// Discarded if the user has moved on to a different app, so a slow measurement
+    /// of a big Library can never overwrite a newer scan with another app's numbers.
+    func applyMeasuredSizes(_ measured: [Leftover], from scannedBundle: URL) {
+        guard var current = scanResult, current.identity.bundleURL == scannedBundle else { return }
+
+        let byID = Dictionary(measured.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        current.leftovers = current.leftovers.map { item in
+            var item = item
+            item.sizeBytes = byID[item.id]?.sizeBytes
+            item.sizeIsPartial = byID[item.id]?.sizeIsPartial ?? false
+            return item
+        }
+        scanResult = current
     }
 
     // MARK: - Selection
 
-    func toggle(_ leftover: Leftover) {
+    public func toggle(_ leftover: Leftover) {
         if selectedPaths.contains(leftover.id) {
             selectedPaths.remove(leftover.id)
         } else {
@@ -255,29 +257,29 @@ final class AppModel {
         }
     }
 
-    func setSelection(_ isSelected: Bool, for items: [Leftover]) {
+    public func setSelection(_ isSelected: Bool, for items: [Leftover]) {
         for item in items {
             if isSelected { selectedPaths.insert(item.id) } else { selectedPaths.remove(item.id) }
         }
     }
 
-    func selectAll() {
+    public func selectAll() {
         selectedPaths = Set(scanResult?.leftovers.map(\.id) ?? [])
     }
 
-    func selectCertainOnly() {
+    public func selectCertainOnly() {
         selectedPaths = Set(
             scanResult?.leftovers.filter { $0.confidence.selectedByDefault }.map(\.id) ?? []
         )
     }
 
-    func revealInFinder(_ leftover: Leftover) {
+    public func revealInFinder(_ leftover: Leftover) {
         NSWorkspace.shared.activateFileViewerSelecting([leftover.url])
     }
 
     // MARK: - Removal
 
-    func performRemoval() {
+    public func performRemoval() {
         guard let scanResult, !selectedLeftovers.isEmpty else { return }
         phase = .removing
 
@@ -306,7 +308,7 @@ final class AppModel {
         }
     }
 
-    func startOver() {
+    public func startOver() {
         scanResult = nil
         selectedPaths = []
         report = nil
@@ -317,7 +319,7 @@ final class AppModel {
     }
 }
 
-extension Int64 {
+public extension Int64 {
     var formattedBytes: String {
         ByteCountFormatter.string(fromByteCount: self, countStyle: .file)
     }
@@ -329,7 +331,7 @@ extension Int64 {
     }
 }
 
-extension Leftover {
+public extension Leftover {
     var sizeDescription: String {
         sizeBytes.map { $0.formattedBytes(partial: sizeIsPartial) } ?? "—"
     }

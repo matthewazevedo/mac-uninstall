@@ -1,3 +1,4 @@
+import MacUninstallAppCore
 import MacUninstallCore
 import SwiftUI
 import UniformTypeIdentifiers

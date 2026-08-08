@@ -1,4 +1,5 @@
 import AppKit
+import MacUninstallAppCore
 import SwiftUI
 
 @main

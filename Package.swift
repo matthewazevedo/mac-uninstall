@@ -19,10 +19,19 @@ let package = Package(
             name: "MacUninstallCore",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The model layer, split out from the executable for one reason: a SwiftPM
+        // executable target cannot be imported by tests, and "which items are ticked
+        // by default" is part of the safety story, not a detail of the views.
+        .target(
+            name: "MacUninstallAppCore",
+            dependencies: ["MacUninstallCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "MacUninstallApp",
             dependencies: [
                 "MacUninstallCore",
+                "MacUninstallAppCore",
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
@@ -38,6 +47,11 @@ let package = Package(
         .testTarget(
             name: "MacUninstallCoreTests",
             dependencies: ["MacUninstallCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "MacUninstallAppCoreTests",
+            dependencies: ["MacUninstallAppCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
