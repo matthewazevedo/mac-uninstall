@@ -11,7 +11,10 @@ public enum HelperConstants {
 
     /// Bumped whenever the protocol changes, so the app can detect a stale daemon
     /// left behind by a previous install and re-register it.
-    public static let protocolVersion = 1
+    ///
+    /// 2: quarantine reports where each item landed, restore moves them back, and
+    ///    bootout is daemon-only.
+    public static let protocolVersion = 2
 }
 
 /// The complete set of operations the root daemon will perform.
@@ -30,15 +33,31 @@ public enum HelperConstants {
     /// The helper independently rejects any path that fails ``ProtectedPaths``, so a
     /// compromised or buggy client cannot direct it at the system.
     ///
-    /// - Parameter reply: Per-path error strings, empty when everything succeeded.
+    /// - Parameter reply: Per-path error strings, empty when everything succeeded;
+    ///   then each moved path mapped to where it landed, which is what a later
+    ///   restore needs and cannot infer, since a name collision is renamed.
     func quarantine(
         paths: [String],
         into directory: String,
-        reply: @escaping ([String: String]) -> Void
+        reply: @escaping ([String: String], [String: String]) -> Void
     )
 
-    /// Unloads a launchd job so it stops running and cannot recreate its own files.
-    func bootout(label: String, isDaemon: Bool, reply: @escaping (String?) -> Void)
+    /// Moves quarantined items back to where they came from.
+    ///
+    /// - Parameter items: Quarantined path to original path. Both ends are validated
+    ///   here: the source must be inside the app's quarantine area and the
+    ///   destination must pass ``ProtectedPaths``, so this cannot be turned into
+    ///   "write this file anywhere as root".
+    /// - Parameter reply: Original path to error string, empty on full success.
+    func restore(items: [String: String], reply: @escaping ([String: String]) -> Void)
+
+    /// Unloads a system launch daemon so it stops running and cannot recreate its
+    /// own files.
+    ///
+    /// Daemons only, because this process is root: a user agent lives in the calling
+    /// user's launchd domain, which a uid-0 process cannot name and the user does not
+    /// need help reaching.
+    func bootoutDaemon(label: String, reply: @escaping (String?) -> Void)
 
     /// Protocol version of the installed daemon, used to detect a stale build.
     func version(reply: @escaping (Int) -> Void)

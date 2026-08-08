@@ -21,6 +21,17 @@ public enum HelperValidation {
         return !standardized.contains("/../") && !directory.contains("/../")
     }
 
+    /// True for a path that sits directly inside a quarantine session folder.
+    ///
+    /// Restoring moves a file *out* of quarantine, so the source has to be pinned to
+    /// the same area the destination check pins the target to — otherwise "put this
+    /// back" would move any file on the system, as root.
+    public static func isQuarantinedItem(_ path: String) -> Bool {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        let parent = (standardized as NSString).deletingLastPathComponent
+        return isAcceptableQuarantineDirectory(parent) && !path.contains("/../")
+    }
+
     /// The top of the app's quarantine area for a given session directory.
     ///
     /// The daemon fixes ownership from here down, so the folders it created implicitly

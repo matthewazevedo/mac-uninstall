@@ -10,22 +10,36 @@ final class SpyPrivilegedExecutor: PrivilegedExecutor, @unchecked Sendable {
 
     private let lock = NSLock()
     private var _quarantineCalls: [QuarantineCall] = []
-    private var _bootouts: [(label: String, isDaemon: Bool)] = []
+    private var _restoreCalls: [[RestoreRequest]] = []
+    private var _bootouts: [String] = []
 
     var quarantineCalls: [QuarantineCall] { lock.withLock { _quarantineCalls } }
-    var bootouts: [(label: String, isDaemon: Bool)] { lock.withLock { _bootouts } }
+    var restoreCalls: [[RestoreRequest]] { lock.withLock { _restoreCalls } }
+    var bootouts: [String] { lock.withLock { _bootouts } }
 
     var errorToThrow: Error?
     var failuresToReturn: [String: String] = [:]
+    var restoreFailuresToReturn: [String: String] = [:]
 
-    func quarantine(items: [URL], into directory: URL) async throws -> [String: String] {
+    func quarantine(items: [URL], into directory: URL) async throws -> QuarantineResult {
         lock.withLock { _quarantineCalls.append(QuarantineCall(items: items, directory: directory)) }
         if let errorToThrow { throw errorToThrow }
-        return failuresToReturn
+        // Stand in for the real mover, which reports where each item landed.
+        let destinations = items.reduce(into: [String: String]()) { result, item in
+            guard failuresToReturn[item.path] == nil else { return }
+            result[item.path] = directory.appending(path: item.lastPathComponent).path
+        }
+        return QuarantineResult(failures: failuresToReturn, destinations: destinations)
     }
 
-    func bootout(label: String, isDaemon: Bool) async throws {
-        lock.withLock { _bootouts.append((label, isDaemon)) }
+    func restore(_ items: [RestoreRequest]) async throws -> [String: String] {
+        lock.withLock { _restoreCalls.append(items) }
+        if let errorToThrow { throw errorToThrow }
+        return restoreFailuresToReturn
+    }
+
+    func bootoutDaemon(label: String) async throws {
+        lock.withLock { _bootouts.append(label) }
         if let errorToThrow { throw errorToThrow }
     }
 }
@@ -130,9 +144,21 @@ final class RemoverTests: XCTestCase {
             leftover("/Library/LaunchDaemons/com.test.daemon.plist", admin: true, category: .launchItems)
         ])
 
-        XCTAssertEqual(spy.bootouts.count, 1)
-        XCTAssertEqual(spy.bootouts[0].label, "com.test.daemon")
-        XCTAssertTrue(spy.bootouts[0].isDaemon)
+        XCTAssertEqual(spy.bootouts, ["com.test.daemon"])
+    }
+
+    /// A path the remover refuses to touch must not have its job booted out either.
+    /// The rejection is the gate everything passes through, not a filter on one step.
+    func testRefusedPathsAreNotBootedOut() async {
+        let spy = SpyPrivilegedExecutor()
+        let remover = Remover(privileged: spy)
+
+        let report = await remover.remove([
+            leftover("/Library/LaunchDaemons", admin: true, category: .launchItems)
+        ])
+
+        XCTAssertEqual(report.failed.count, 1)
+        XCTAssertTrue(spy.bootouts.isEmpty, "Nothing refused should reach launchctl")
     }
 
     /// Trashing is verified against a real file so the reversible path is exercised.
@@ -164,5 +190,94 @@ final class RemoverTests: XCTestCase {
         XCTAssertTrue(quoted.contains("'\\''"), "Single quotes must be escaped")
         // The dangerous text survives only as literal characters inside the quotes.
         XCTAssertFalse(quoted.contains("; rm -rf /'\n"))
+    }
+
+    private static let fakeQuarantine = URL(
+        fileURLWithPath:
+            "/Users/someone/Library/Application Support/MacUninstall/Quarantine/2026-08-08T12-00-00Z"
+    )
+
+    /// Two items from different folders routinely share a filename. `mv -f` would
+    /// destroy the first, in the step whose whole promise is that it is reversible.
+    func testFallbackRenamesRatherThanOverwritingOnACollision() {
+        let items = [
+            URL(fileURLWithPath: "/Library/Preferences/com.acme.App.plist"),
+            URL(fileURLWithPath: "/Library/Application Support/Acme/com.acme.App.plist"),
+        ]
+
+        let destinations = AppleScriptPrivilegedExecutor.destinations(
+            for: items, in: Self.fakeQuarantine
+        )
+
+        XCTAssertEqual(destinations.count, 2)
+        XCTAssertEqual(Set(destinations.values).count, 2, "Both items must survive")
+        for item in items {
+            XCTAssertTrue(
+                destinations[item.path]?.hasPrefix(Self.fakeQuarantine.path) == true,
+                "Everything stays inside the quarantine folder"
+            )
+        }
+    }
+
+    /// Without this the folder belongs to root, inside the user's own Library, and the
+    /// promise that quarantined items are recoverable is false for everyone who has not
+    /// yet approved the helper.
+    func testFallbackHandsTheQuarantineFolderBackToTheUser() {
+        let items = [URL(fileURLWithPath: "/Library/LaunchDaemons/com.acme.plist")]
+        let script = AppleScriptPrivilegedExecutor.quarantineScript(
+            items: items,
+            into: Self.fakeQuarantine,
+            destinations: AppleScriptPrivilegedExecutor.destinations(for: items, in: Self.fakeQuarantine)
+        )
+
+        XCTAssertTrue(script.contains("/usr/sbin/chown -R \(getuid()):\(getgid())"), script)
+        XCTAssertTrue(
+            script.contains("'/Users/someone/Library/Application Support/MacUninstall'"),
+            "Ownership is repaired from the top of the app's own area down"
+        )
+    }
+
+    /// One failed move must not abandon the items after it, and the caller has to be
+    /// told which ones did not make it.
+    func testFallbackReportsPerItemFailuresRatherThanAbortingTheBatch() {
+        let items = [
+            URL(fileURLWithPath: "/Library/LaunchDaemons/com.acme.one.plist"),
+            URL(fileURLWithPath: "/Library/LaunchDaemons/com.acme.two.plist"),
+        ]
+        let script = AppleScriptPrivilegedExecutor.quarantineScript(
+            items: items,
+            into: Self.fakeQuarantine,
+            destinations: AppleScriptPrivilegedExecutor.destinations(for: items, in: Self.fakeQuarantine)
+        )
+
+        // Every move is guarded, so `set -e` cannot end the run at the first failure.
+        XCTAssertEqual(script.components(separatedBy: "if /bin/mv").count - 1, items.count)
+        XCTAssertTrue(script.contains("\(AppleScriptPrivilegedExecutor.failureMarker) 0"))
+        XCTAssertTrue(script.contains("\(AppleScriptPrivilegedExecutor.failureMarker) 1"))
+
+        let failed = AppleScriptPrivilegedExecutor.failedIndices(
+            in: "\(AppleScriptPrivilegedExecutor.failureMarker) 1\n"
+        )
+        XCTAssertEqual(failed, [1])
+    }
+
+    /// A restore must not overwrite: the app may have been reinstalled since.
+    func testRestoreScriptRefusesToOverwriteAndPutsOwnershipBack() {
+        let script = AppleScriptPrivilegedExecutor.restoreScript([
+            RestoreRequest(
+                quarantinedPath: Self.fakeQuarantine.appending(path: "com.acme.plist").path,
+                originalPath: "/Library/LaunchDaemons/com.acme.plist"
+            )
+        ])
+
+        XCTAssertTrue(script.contains("if [ -e '/Library/LaunchDaemons/com.acme.plist' ]"), script)
+        // A user-writable launch daemon is a privilege escalation, so a system
+        // location gets root:wheel back rather than the user who owned the copy in
+        // quarantine.
+        XCTAssertEqual(AppleScriptPrivilegedExecutor.ownerSpec(for: "/Library/LaunchDaemons/x"), "0:0")
+        XCTAssertEqual(
+            AppleScriptPrivilegedExecutor.ownerSpec(for: "/Users/someone/Library/Caches/x"),
+            "\(getuid()):\(getgid())"
+        )
     }
 }
