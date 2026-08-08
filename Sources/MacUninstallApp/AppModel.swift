@@ -60,6 +60,12 @@ final class AppModel {
         selectedLeftovers.compactMap(\.sizeBytes).reduce(0, +)
     }
 
+    /// True when one of the selected items was too large to measure exactly, so the
+    /// total is a floor and has to be shown as one.
+    var selectedSizeIsPartial: Bool {
+        selectedLeftovers.contains { $0.sizeIsPartial }
+    }
+
     var selectionNeedsAdmin: Bool {
         selectedLeftovers.contains { $0.requiresAdmin }
     }
@@ -225,13 +231,14 @@ final class AppModel {
             guard var current = self.scanResult,
                   current.identity.bundleURL == scannedBundle else { return }
 
-            let sizes = Dictionary(
-                measured.compactMap { item in item.sizeBytes.map { (item.id, $0) } },
+            let byID = Dictionary(
+                measured.map { ($0.id, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
             current.leftovers = current.leftovers.map { item in
                 var item = item
-                item.sizeBytes = sizes[item.id]
+                item.sizeBytes = byID[item.id]?.sizeBytes
+                item.sizeIsPartial = byID[item.id]?.sizeIsPartial ?? false
                 return item
             }
             self.scanResult = current
@@ -313,5 +320,17 @@ final class AppModel {
 extension Int64 {
     var formattedBytes: String {
         ByteCountFormatter.string(fromByteCount: self, countStyle: .file)
+    }
+
+    /// "≥ 4.2 GB" when the walk stopped at its bound. A confident wrong number is
+    /// worse than an honest floor on a screen whose whole job is to be trusted.
+    func formattedBytes(partial: Bool) -> String {
+        partial ? "≥ " + formattedBytes : formattedBytes
+    }
+}
+
+extension Leftover {
+    var sizeDescription: String {
+        sizeBytes.map { $0.formattedBytes(partial: sizeIsPartial) } ?? "—"
     }
 }

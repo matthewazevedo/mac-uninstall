@@ -97,9 +97,9 @@ public enum ProtectedPaths {
         let path = url.standardizedFileURL.path
 
         guard path.hasPrefix("/") else { return .notAbsolute }
-        if exactProtected.contains(path) { return .protectedExactPath }
+        if isProtectedExactly(path) { return .protectedExactPath }
 
-        for tree in protectedTrees where path == tree || path.hasPrefix(tree + "/") {
+        if let tree = protectedTree(containing: path) {
             return .insideProtectedTree(tree)
         }
 
@@ -111,16 +111,15 @@ public enum ProtectedPaths {
             return .tooShallow
         }
 
-        guard isUnder(allowedRoots, path: path) else { return .outsideAllowedRoots }
+        guard isUnderAllowedRoots(path) else { return .outsideAllowedRoots }
 
         // A symlink must not lead somewhere we would otherwise refuse.
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
         if resolved != path {
-            if exactProtected.contains(resolved) { return .symlinkEscapesAllowedRoots(resolved) }
-            for tree in protectedTrees where resolved == tree || resolved.hasPrefix(tree + "/") {
+            if isProtectedExactly(resolved) || protectedTree(containing: resolved) != nil {
                 return .symlinkEscapesAllowedRoots(resolved)
             }
-            guard isUnder(allowedRoots, path: resolved) else {
+            guard isUnderAllowedRoots(resolved) else {
                 return .symlinkEscapesAllowedRoots(resolved)
             }
         }
@@ -132,16 +131,50 @@ public enum ProtectedPaths {
         rejection(for: url) == nil
     }
 
-    private static func isUnder(_ roots: [String], path: String) -> Bool {
-        roots.contains { path.hasPrefix($0 + "/") }
+    // MARK: - Comparison
+    //
+    // Every comparison below folds case, because the default macOS filesystem does.
+    // `/Library/launchdaemons` opens the same directory as `/Library/LaunchDaemons`,
+    // and a case-sensitive `==` against the protected list would have let a symlink
+    // resolving to the lower-cased spelling through — while still clearing the
+    // allowed-roots check, which `/Library/` matches either way.
+    //
+    // On a case-sensitive volume this is stricter than it needs to be rather than
+    // looser: the protections match more paths, and every path the scanner produces
+    // comes from reading a directory, so it already carries the on-disk spelling.
+
+    private static func folded(_ path: String) -> String { path.lowercased() }
+
+    private static let exactProtectedFolded: Set<String> = Set(exactProtected.map(folded))
+    private static let protectedTreesFolded: [String] = protectedTrees.map(folded)
+    private static let allowedRootsFolded: [String] = allowedRoots.map(folded)
+
+    private static func isProtectedExactly(_ path: String) -> Bool {
+        exactProtectedFolded.contains(folded(path))
+    }
+
+    /// The protected tree a path sits in, named in its documented spelling so the
+    /// explanation shown to the user reads properly.
+    private static func protectedTree(containing path: String) -> String? {
+        let candidate = folded(path)
+        for (index, tree) in protectedTreesFolded.enumerated()
+        where candidate == tree || candidate.hasPrefix(tree + "/") {
+            return protectedTrees[index]
+        }
+        return nil
+    }
+
+    private static func isUnderAllowedRoots(_ path: String) -> Bool {
+        let candidate = folded(path)
+        return allowedRootsFolded.contains { candidate.hasPrefix($0 + "/") }
     }
 
     /// True for `/Applications/Acme.app` and `~/Applications/Acme.app`, the only
     /// legitimate removal targets shallow enough to trip the depth rule.
     private static func isDirectChildOfApplications(_ path: String) -> Bool {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let parents = ["/Applications", home + "/Applications"]
-        let parent = (path as NSString).deletingLastPathComponent
+        let parents = ["/Applications", home + "/Applications"].map(folded)
+        let parent = folded((path as NSString).deletingLastPathComponent)
         return parents.contains(parent)
     }
 }

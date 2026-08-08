@@ -90,6 +90,43 @@ final class ProtectedPathsTests: XCTestCase {
         }
     }
 
+    /// The default macOS filesystem is case-insensitive, so `/Library/launchdaemons`
+    /// opens the same directory as `/Library/LaunchDaemons`. A case-sensitive check
+    /// missed that spelling while the allowed-roots test matched it either way, which
+    /// left the protected list reachable through a differently-cased symlink target.
+    func testProtectionsFoldCaseTheWayTheFilesystemDoes() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        for path in [
+            "/library/launchdaemons",
+            "/Library/LAUNCHDAEMONS",
+            "/LIBRARY",
+            "/system/library",
+            home.lowercased() + "/library/keychains/login.keychain-db",
+            home.lowercased() + "/library/mobile documents/anything",
+        ] {
+            XCTAssertFalse(
+                ProtectedPaths.isSafeToRemove(URL(fileURLWithPath: path)),
+                "\(path) opens a protected location and must be refused"
+            )
+        }
+    }
+
+    /// Folding case must not start refusing ordinary leftovers.
+    func testCaseFoldingDoesNotRefuseGenuineLeftovers() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for path in [
+            "/Library/LaunchDaemons/com.acme.helper.plist",
+            "/library/launchdaemons/com.acme.helper.plist",
+            home + "/Library/Caches/com.acme.App",
+        ] {
+            XCTAssertTrue(
+                ProtectedPaths.isSafeToRemove(URL(fileURLWithPath: path)),
+                "\(path) is ordinary app data"
+            )
+        }
+    }
+
     func testRejectionExplanationsAreNonEmpty() {
         let rejection = ProtectedPaths.rejection(for: URL(fileURLWithPath: "/System"))
         XCTAssertNotNil(rejection)

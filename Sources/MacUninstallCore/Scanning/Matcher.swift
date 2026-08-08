@@ -116,7 +116,20 @@ public struct Matcher: Sendable {
             )
         }
 
-        // 5. Vendor-level folders. Shared with the vendor's other products, so
+        // 5. Team identifier prefixes, used by group containers such as
+        //    `Q6L2SF6YDW.com.acme.shared`.
+        //
+        //    Ahead of the vendor rule because the first hit wins and this one is the
+        //    stronger evidence: a team identifier is issued by Apple to one developer,
+        //    while a vendor name is a guess at a folder title.
+        if let team = identity.teamID?.lowercased(), loweredStem.hasPrefix(team + ".") {
+            return Match(
+                confidence: .likely,
+                reason: "Registered to the developer team \(identity.teamID ?? team)."
+            )
+        }
+
+        // 6. Vendor-level folders. Shared with the vendor's other products, so
         //    this is surfaced for review and never auto-selected.
         for vendor in identity.vendorNames where Self.isDistinctive(vendor) {
             if loweredStem == vendor.lowercased()
@@ -126,15 +139,6 @@ public struct Matcher: Sendable {
                     reason: "Belongs to the vendor \(vendor). Other apps from the same vendor may share it."
                 )
             }
-        }
-
-        // 6. Team identifier prefixes, used by group containers such as
-        //    `Q6L2SF6YDW.com.acme.shared`.
-        if let team = identity.teamID?.lowercased(), loweredStem.hasPrefix(team + ".") {
-            return Match(
-                confidence: .likely,
-                reason: "Registered to the developer team \(identity.teamID ?? team)."
-            )
         }
 
         return nil

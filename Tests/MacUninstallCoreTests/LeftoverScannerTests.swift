@@ -72,7 +72,7 @@ final class LeftoverScannerTests: XCTestCase {
         try makeFile("Library/Preferences/com.unrelated.Other.plist")
 
         let result = await scanner([
-            .init(url: support, category: .supportFiles, childrenOnly: false),
+            .init(url: support, category: .supportFiles, descendsIntoVendorFolders: true),
             .init(url: prefs, category: .preferences),
             .init(url: daemons, category: .launchItems, requiresAdmin: true),
         ]).scan(for: identity(bundleURL: bundle))
@@ -102,7 +102,7 @@ final class LeftoverScannerTests: XCTestCase {
         try makeFile("Library/Application Support/AcmeSoft/OtherProduct/important.db")
 
         let result = await scanner([
-            .init(url: support, category: .supportFiles, childrenOnly: false)
+            .init(url: support, category: .supportFiles, descendsIntoVendorFolders: true)
         ]).scan(for: identity(bundleURL: root.appending(path: "Applications/Nope.app")))
 
         let paths = result.leftovers.map(\.url.lastPathComponent)

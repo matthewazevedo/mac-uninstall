@@ -134,7 +134,7 @@ final class CrossContaminationTests: XCTestCase {
         )
 
         let result = await scanner([
-            .init(url: caches, category: .caches, childrenOnly: false)
+            .init(url: caches, category: .caches, descendsIntoVendorFolders: true)
         ]).scan(for: identity)
 
         let paths = result.leftovers.map(\.url.path)
