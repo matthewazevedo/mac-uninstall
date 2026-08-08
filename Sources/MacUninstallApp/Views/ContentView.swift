@@ -49,6 +49,13 @@ struct ContentView: View {
                 EmptyStateView()
             case .scanning(let appName):
                 ScanningView(appName: appName)
+            case .findingOrphans:
+                ProgressPanel(
+                    title: "Looking for leftovers…",
+                    subtitle: "Reading the identifiers your Library holds, and subtracting the apps you still have."
+                )
+            case .orphans:
+                OrphanListView()
             case .reviewing:
                 if let result = model.scanResult {
                     ReviewView(result: result)
@@ -58,9 +65,14 @@ struct ContentView: View {
                     title: "Removing…",
                     subtitle: "Quitting the app and moving its files out of the way."
                 )
+            case .restoring:
+                ProgressPanel(
+                    title: "Putting it back…",
+                    subtitle: "Moving everything to where it came from."
+                )
             case .finished:
-                if let report = model.report, let result = model.scanResult {
-                    SummaryView(report: report, appName: result.identity.displayName)
+                if let report = model.report {
+                    SummaryView(report: report, title: model.summaryTitle, kind: model.lastAction)
                 }
             }
         }
@@ -114,6 +126,18 @@ struct EmptyStateView: View {
                 .font(DS.TypeScale.control)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .multilineTextAlignment(.center)
+
+            HStack(spacing: DS.Space.insideRow) {
+                // The case the sidebar cannot serve: the app is already gone, so
+                // there is no bundle left to scan from.
+                Button("Find leftovers from removed apps") { model.findOrphans() }
+
+                if let receipt = model.undoableReceipt {
+                    Button("Undo removing \(receipt.appName)") { model.undoLastRemoval() }
+                }
+            }
+            .buttonStyle(QuietButtonStyle(small: true))
+            .padding(.top, DS.Space.insideRow)
 
             if model.fullDiskAccess == .granted {
                 HStack(spacing: DS.Space.insideRow + 2) {

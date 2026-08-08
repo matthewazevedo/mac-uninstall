@@ -3,11 +3,14 @@ import MacUninstallAppCore
 import MacUninstallCore
 import SwiftUI
 
-/// Closes the loop: what was removed, what was not, and how to undo it.
+/// Closes the loop: what happened, what did not, and how to undo it.
 struct SummaryView: View {
     @Environment(AppModel.self) private var model
     let report: RemovalReport
-    let appName: String
+    let title: String
+    let kind: AppModel.ActionKind
+
+    private var isRestore: Bool { kind == .restore }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,7 +20,7 @@ struct SummaryView: View {
 
                     if !report.failed.isEmpty {
                         section(
-                            title: "Could not be removed",
+                            title: isRestore ? "Could not be put back" : "Could not be removed",
                             systemImage: "exclamationmark.triangle.fill",
                             tint: DS.Palette.needsReview,
                             outcomes: report.failed
@@ -25,13 +28,13 @@ struct SummaryView: View {
                     }
 
                     section(
-                        title: "Removed",
+                        title: isRestore ? "Put back" : "Removed",
                         systemImage: "checkmark.circle.fill",
                         tint: DS.Palette.certain,
                         outcomes: report.succeeded
                     )
 
-                    if let quarantine = report.quarantineDirectory {
+                    if let quarantine = report.quarantineDirectory, !isRestore {
                         quarantineNote(quarantine)
                     }
                 }
@@ -41,12 +44,22 @@ struct SummaryView: View {
             Divider()
 
             HStack {
-                Button("Open Trash") {
-                    NSWorkspace.shared.open(
-                        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".Trash")
-                    )
+                if !isRestore {
+                    Button("Open Trash") {
+                        NSWorkspace.shared.open(
+                            FileManager.default.homeDirectoryForCurrentUser.appending(path: ".Trash")
+                        )
+                    }
+                    .buttonStyle(QuietButtonStyle())
+
+                    // Offered only while the files are still where the removal left
+                    // them: an emptied Trash means there is nothing to put back.
+                    if model.undoableReceipt != nil {
+                        Button("Undo") { model.undoLastRemoval() }
+                            .buttonStyle(QuietButtonStyle())
+                    }
                 }
-                .buttonStyle(QuietButtonStyle())
+
                 Spacer()
                 Button("Done") { model.startOver() }
                     .buttonStyle(AccentButtonStyle())
@@ -56,13 +69,22 @@ struct SummaryView: View {
         }
     }
 
+    private var bannerTitle: String {
+        switch (isRestore, report.isFullSuccess) {
+        case (false, true): "\(title) removed"
+        case (false, false): "\(title) partially removed"
+        case (true, true): "\(title) put back"
+        case (true, false): "\(title) partially put back"
+        }
+    }
+
     private var banner: some View {
         HStack(spacing: 12) {
             Circle()
                 .fill(report.isFullSuccess ? DS.Palette.certain : DS.Palette.needsReview)
                 .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 3) {
-                Text(report.isFullSuccess ? "\(appName) removed" : "\(appName) partially removed")
+                Text(bannerTitle)
                     .font(DS.TypeScale.summaryTitle)
                     .tracking(DS.Tracking.summaryTitle)
                 Text("\(report.succeeded.count) of \(report.outcomes.count) items handled.")
@@ -109,8 +131,8 @@ struct SummaryView: View {
             Text("System files are recoverable").font(DS.TypeScale.bannerTitle)
             Text("""
                 Items that needed administrator rights were moved here rather than deleted, \
-                alongside a MANIFEST.txt listing their original paths. Delete this folder once \
-                you are satisfied nothing broke.
+                alongside a MANIFEST.txt listing their original paths. Undo puts them back; \
+                delete this folder once you are satisfied nothing broke.
                 """)
                 .font(DS.TypeScale.secondary)
                 .foregroundStyle(DS.Palette.textSecondary)

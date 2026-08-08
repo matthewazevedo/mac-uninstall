@@ -11,9 +11,19 @@ public final class AppModel {
     public enum Phase: Equatable {
         case idle
         case scanning(appName: String)
+        case findingOrphans
+        case orphans
         case reviewing
         case removing
+        case restoring
         case finished
+    }
+
+    /// Which way the last action ran, so the summary screen can say what happened
+    /// rather than assuming everything is a removal.
+    public enum ActionKind: Sendable, Equatable {
+        case removal
+        case restore
     }
 
     // MARK: - State
@@ -29,7 +39,20 @@ public final class AppModel {
     public var helperStatus: HelperClient.Status = .notRegistered
     public var isDropTargeted = false
 
+    /// Leftovers grouped by an identifier with no installed app behind it.
+    public var orphanGroups: [OrphanGroup] = []
+    /// The most recent removal that can still be put back, or `nil` when there is
+    /// nothing to undo — including when the Trash has since been emptied.
+    public var undoableReceipt: RemovalReceipt?
+    public private(set) var lastAction: ActionKind = .removal
+    /// What the summary screen is reporting on.
+    public private(set) var summaryTitle: String = ""
+
+    /// True while the review screen is showing orphans rather than an installed app.
+    private var isOrphanTarget = false
+
     private let scanner = AppScanner()
+    private let receipts = ReceiptStore()
 
     /// One client for the app's lifetime so the XPC connection is reused rather than
     /// rebuilt for every request.
@@ -83,6 +106,7 @@ public final class AppModel {
         refreshPermissions()
         refreshHelperStatus()
         loadInstalledApps()
+        refreshUndoAvailability()
     }
 
     // MARK: - Privileged helper
@@ -217,6 +241,57 @@ public final class AppModel {
         }
     }
 
+    // MARK: - Orphans
+
+    /// Looks for data whose app is already gone.
+    ///
+    /// This is the case every other entry point cannot serve: once the bundle has
+    /// been dragged to the Trash there is no identity left to match against, which is
+    /// exactly when people go looking for a tool like this.
+    public func findOrphans() {
+        errorMessage = nil
+        report = nil
+        scanResult = nil
+        isOrphanTarget = false
+        phase = .findingOrphans
+
+        let scanner = self.scanner
+        let known = installedApps
+        Task {
+            let groups = await Task.detached { () -> [OrphanGroup] in
+                var apps = known.isEmpty ? scanner.installedApps() : known
+                // This app's own preferences are not an orphan, even when it is
+                // running from a build directory rather than /Applications.
+                if let identifier = Bundle.main.bundleIdentifier {
+                    apps.append(AppIdentity(
+                        bundleURL: Bundle.main.bundleURL,
+                        bundleID: identifier,
+                        displayName: "Mac Uninstall"
+                    ))
+                }
+                return await OrphanScanner().scan(installedApps: apps)
+            }.value
+
+            self.orphanGroups = groups
+            self.phase = .orphans
+        }
+    }
+
+    /// Opens one group of orphans in the ordinary review screen.
+    public func inspect(_ group: OrphanGroup) {
+        isOrphanTarget = true
+        scanResult = ScanResult(
+            identity: .orphan(identifier: group.identifier),
+            leftovers: group.leftovers
+        )
+        // Nothing here is `certain`, so nothing is ticked. The absence of an app is
+        // a strong hint, not proof.
+        selectedPaths = Set(
+            group.leftovers.filter { $0.confidence.selectedByDefault }.map(\.id)
+        )
+        phase = .reviewing
+    }
+
     /// Fills in sizes after the list is already on screen.
     private func measureSizes(for result: ScanResult) {
         let leftovers = result.leftovers
@@ -282,15 +357,19 @@ public final class AppModel {
     public func performRemoval() {
         guard let scanResult, !selectedLeftovers.isEmpty else { return }
         phase = .removing
+        lastAction = .removal
+        summaryTitle = scanResult.identity.displayName
 
         let items = selectedLeftovers
         let identity = scanResult.identity
+        // Orphans have no app to quit, and quitting on the strength of a shared
+        // vendor prefix would take an unrelated running app down with it.
+        let needsQuit = !isOrphanTarget
 
         Task {
             // Quit first: a running app rewrites its preferences on exit and would
             // recreate files we are about to delete.
-            let quit = await RunningAppGuard.quit(identity)
-            if !quit {
+            if needsQuit, !(await RunningAppGuard.quit(identity)) {
                 self.errorMessage = """
                     \(identity.displayName) is still running and could not be quit. \
                     Quit it manually, then try again.
@@ -303,8 +382,53 @@ public final class AppModel {
                 privileged: AdaptivePrivilegedExecutor(helper: self.helper)
             ).remove(items)
             self.report = report
+            self.recordReceipt(for: report, appName: identity.displayName)
+            // The list was built before this removal, so it now describes a state
+            // that no longer exists.
+            self.orphanGroups = []
+            self.isOrphanTarget = false
             self.phase = .finished
             self.loadInstalledApps()
+        }
+    }
+
+    // MARK: - Undo
+
+    /// Puts the last removal back.
+    public func undoLastRemoval() {
+        guard let receipt = undoableReceipt else { return }
+        phase = .restoring
+        lastAction = .restore
+        summaryTitle = receipt.appName
+
+        Task {
+            let report = await Remover(
+                privileged: AdaptivePrivilegedExecutor(helper: self.helper)
+            ).restore(receipt)
+
+            self.report = report
+            self.scanResult = nil
+            // A receipt that has been fully honoured describes nothing that is still
+            // recoverable, so offering it again would be offering a no-op.
+            if report.isFullSuccess { self.receipts.delete(receipt) }
+            self.phase = .finished
+            self.refreshUndoAvailability()
+            self.loadInstalledApps()
+        }
+    }
+
+    private func recordReceipt(for report: RemovalReport, appName: String) {
+        guard let receipt = RemovalReceipt(report: report, appName: appName) else { return }
+        try? receipts.save(receipt)
+        undoableReceipt = receipt
+    }
+
+    /// Reads the newest removal that still has something to put back. Checking the
+    /// filesystem is the point: an emptied Trash means the offer would not work.
+    public func refreshUndoAvailability() {
+        let receipts = self.receipts
+        Task {
+            self.undoableReceipt = await Task.detached { receipts.latestRestorable() }.value
         }
     }
 
@@ -313,9 +437,13 @@ public final class AppModel {
         selectedPaths = []
         report = nil
         errorMessage = nil
-        phase = .idle
+        // Cancelling out of a group of orphans goes back to the list it came from,
+        // rather than making the user run the search again.
+        phase = (isOrphanTarget && !orphanGroups.isEmpty) ? .orphans : .idle
+        isOrphanTarget = false
         refreshPermissions()
         refreshHelperStatus()
+        refreshUndoAvailability()
     }
 }
 

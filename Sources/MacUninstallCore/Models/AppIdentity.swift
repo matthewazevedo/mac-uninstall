@@ -55,6 +55,21 @@ public struct AppIdentity: Sendable, Hashable, Codable {
 }
 
 public extension AppIdentity {
+
+    /// Identity for a set of leftovers whose app is no longer installed.
+    ///
+    /// There is no bundle to read, so ``bundleURL`` names where one would have been.
+    /// Nothing ever reads it from disk: it exists so a group of orphans can travel
+    /// through the same review screen as an ordinary scan, with the identifier as its
+    /// title and ``isRemovable`` answering the way it would for any other app.
+    static func orphan(identifier: String) -> AppIdentity {
+        AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/\(identifier).app"),
+            bundleID: identifier,
+            displayName: identifier
+        )
+    }
+
     /// The reverse-DNS prefix shared by the app and its helpers, e.g.
     /// `com.google` for `com.google.Chrome`. Used to catch sibling bundle IDs
     /// like `com.google.Keystone.Agent` that no other signal would find.

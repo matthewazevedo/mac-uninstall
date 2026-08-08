@@ -143,6 +143,61 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.scanResult?.leftovers.first?.sizeBytes, 4096)
     }
 
+    // MARK: - Orphans
+
+    func testOpeningAGroupOfOrphansTicksNothing() {
+        let model = AppModel()
+        let group = OrphanGroup(identifier: "com.acme.App", leftovers: [
+            leftover("/Users/x/Library/Preferences/com.acme.App.plist", .possible),
+            leftover("/Users/x/Library/Caches/com.acme.App", .possible),
+        ])
+        model.orphanGroups = [group]
+
+        model.inspect(group)
+
+        XCTAssertEqual(model.phase, .reviewing)
+        XCTAssertEqual(model.scanResult?.identity.bundleID, "com.acme.App")
+        XCTAssertEqual(model.scanResult?.leftovers.count, 2)
+        XCTAssertTrue(
+            model.selectedLeftovers.isEmpty,
+            "The absence of an app is a hint, not proof, so nothing is pre-selected"
+        )
+    }
+
+    /// Cancelling out of a group goes back to the list rather than making the user
+    /// run the search again.
+    func testCancellingAGroupReturnsToTheOrphanList() {
+        let model = AppModel()
+        let group = OrphanGroup(
+            identifier: "com.acme.App",
+            leftovers: [leftover("/Users/x/Library/Caches/com.acme.App", .possible)]
+        )
+        model.orphanGroups = [group]
+        model.inspect(group)
+
+        model.startOver()
+
+        XCTAssertEqual(model.phase, .orphans)
+        XCTAssertNil(model.scanResult)
+    }
+
+    func testCancellingAnOrdinaryScanReturnsToTheStartScreen() {
+        let model = makeModel(with: [leftover("/Users/x/Library/Caches/com.acme.App")])
+        model.startOver()
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    // MARK: - Undo
+
+    func testUndoDoesNothingWithoutARestorableRemoval() {
+        let model = AppModel()
+        model.undoableReceipt = nil
+
+        model.undoLastRemoval()
+
+        XCTAssertEqual(model.phase, .idle, "No receipt, no undo, and no dead-end state")
+    }
+
     // MARK: - Drops
 
     func testDroppingSomethingThatIsNotAnAppSaysSoRatherThanScanning() {
