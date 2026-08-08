@@ -89,7 +89,7 @@ public struct OrphanScanner: Sendable {
             let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             let stem = Matcher.stem(of: entry.lastPathComponent, isDirectory: isDirectory)
 
-            guard Self.looksLikeBundleIdentifier(stem),
+            guard Matcher.looksLikeBundleIdentifier(stem),
                   !Matcher.isAppleOwned(name: stem),
                   !live.claims(stem),
                   !live.claims(Self.normalized(stem)),
@@ -158,17 +158,6 @@ public struct OrphanScanner: Sendable {
         value.count == 10 && value.allSatisfy { ($0.isLetter && $0.isUppercase) || $0.isNumber }
     }
 
-    /// True for reverse-DNS names, which are the only ones that identify an app on
-    /// their own. `Acme` or `Updater` could belong to anything.
-    static func looksLikeBundleIdentifier(_ stem: String) -> Bool {
-        let parts = stem.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else { return false }
-        return parts.allSatisfy { part in
-            !part.isEmpty && part.allSatisfy { character in
-                character.isLetter || character.isNumber || character == "-" || character == "_"
-            }
-        }
-    }
 }
 
 /// The identifiers that still have an app behind them.

@@ -164,10 +164,28 @@ public struct Matcher: Sendable {
         ]
         var stem = name
         for ext in strippable where stem.lowercased().hasSuffix(ext.lowercased()) {
+            // `.app` is the one entry here that is also a legitimate last segment of
+            // a bundle identifier. Plenty of apps are `com.acme.app`, and their
+            // container is a folder of exactly that name — stripping it left
+            // `com.acme`, which matches the app's own identifier nowhere, so the
+            // container was silently missed on every scan.
+            if ext == ".app" && looksLikeBundleIdentifier(stem) { break }
             stem = String(stem.dropLast(ext.count))
             break
         }
         return stem
+    }
+
+    /// True for reverse-DNS names, which identify an app on their own. `Acme` or
+    /// `Updater` could belong to anything.
+    static func looksLikeBundleIdentifier(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return false }
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.allSatisfy { character in
+                character.isLetter || character.isNumber || character == "-" || character == "_"
+            }
+        }
     }
 
     /// Rejects names that are too short or too common to be evidence.

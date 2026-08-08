@@ -134,6 +134,26 @@ identifier and bundle path.
 **Only `Certain` matches are ticked by default.** Everything else is listed with a
 plain-English reason and left for you to decide.
 
+## Apps you have already removed
+
+Dragging an app to the Trash first and looking for a cleaner afterwards is the normal
+order of events, and it is the one case a bundle-driven scan cannot serve: there is no
+identity left to match against. **Find leftovers from removed apps** works the other way
+round — it reads the bundle identifiers your Library already holds and subtracts
+everything that still has an app behind it.
+
+Only reverse-DNS names are considered. A folder called `Acme` could belong to anything,
+and guessing at it would propose deletions with no evidence behind them. Everything found
+is listed as *Needs review* and nothing is pre-selected: an identifier with no installed
+app is a strong hint, not a proof — the app may live on an external disk, or somewhere
+this does not look.
+
+Anything an installed app could still own is left alone, including its whole vendor
+namespace and its group containers, which are named `<TeamID>.com.acme.shared` and so do
+not carry the owning identifier at the front. `com.google.Keystone` is Chrome's shared
+updater, not an orphan. Missing a real orphan costs you a folder that stays; the opposite
+mistake destroys a working app's data.
+
 ## Safety
 
 The core risk in this category is deleting something shared. The design answers it in
@@ -166,20 +186,33 @@ down by regression tests in `CrossContaminationTests`.
 Running apps are quit before removal — many rewrite their preferences on exit and would
 otherwise recreate the files just deleted.
 
+Every removal writes a receipt of where each item went, so **Undo** puts the whole thing
+back — including the root-owned items in quarantine, which Finder's *Put Back* cannot
+help with. Restored system files get their ownership back rather than staying as the
+user's, because a user-writable launch daemon is a privilege escalation. The offer
+appears only while the files are still where the removal left them; emptying the Trash
+withdraws it rather than leaving a button that cannot work.
+
 ## Layout
 
 ```
 Sources/MacUninstallCore/     Pure Foundation; safe to link into a root process
   Models/       AppIdentity, Leftover, Confidence, ScanResult
   Discovery/    AppScanner — bundle identity, code signature, nested helpers
-  Scanning/     SearchLocation catalog, Matcher, LeftoverScanner
-  Removal/      Remover, PrivilegedExecutor, HelperClient, HelperValidation
+  Scanning/     SearchLocation catalog, Matcher, LeftoverScanner, OrphanScanner
+  Removal/      Remover, PrivilegedExecutor, HelperClient, HelperValidation,
+                RemovalReceipt
   Support/      ProtectedPaths, PermissionChecker
 Sources/MacUninstallHelper/   The root daemon: XPC listener and privileged operations
-Sources/MacUninstallApp/      SwiftUI app, plus RunningAppGuard (the only AppKit user)
+Sources/MacUninstallAppCore/  AppModel and RunningAppGuard — the app's own logic, in a
+                              library because a SwiftPM executable cannot be tested
+Sources/MacUninstallApp/      SwiftUI views and the app entry point
   Updater.swift   Sparkle; linked by the app alone, never by the root daemon
-Tests/                        76 tests, incl. read-only smoke tests against this Mac
+Tests/                        119 tests, incl. read-only smoke tests against this Mac
 ```
+
+Every branch and pull request builds all three products and runs the tests on a macOS
+runner — see `.github/workflows/ci.yml`.
 
 ## The privileged helper
 
@@ -188,11 +221,16 @@ need root to remove. Rather than prompting for a password on every uninstall, th
 ships a daemon that `SMAppService` installs from inside its own bundle. There is no
 separate installer and no `setuid` binary. The user approves it once under Login Items.
 
-The interface across that boundary is a fixed vocabulary of two operations —
-`quarantine(items:into:)` and `bootout(label:isDaemon:)` — not "run this command". An
-earlier design passed a shell script, which is fine for a one-shot authenticated prompt
-but would be a local privilege-escalation hole in a daemon that stays installed:
-anything able to reach the Mach service would get arbitrary root execution.
+The interface across that boundary is a fixed vocabulary of three operations —
+`quarantine`, `restore`, and `bootoutDaemon` — not "run this command". An earlier design
+passed a shell script, which is fine for a one-shot authenticated prompt but would be a
+local privilege-escalation hole in a daemon that stays installed: anything able to reach
+the Mach service would get arbitrary root execution.
+
+Boot-out is daemon-only because this process is root. A user agent lives in the calling
+user's own launchd domain, which a uid-0 process cannot name — `gui/$(getuid())` there
+resolves to `gui/0`, which is nobody's session — and which the user can reach without
+any help.
 
 The daemon trusts nothing the client sends:
 
@@ -222,4 +260,7 @@ dead-ending.
   parsing the signed receipt would cover the rest.
 - A scan takes a few seconds on a full Library. Results render before sizes are
   measured, so the list is usable immediately.
-- No undo *inside the app* yet — recovery is via the Trash or the quarantine manifest.
+- Undo works from the receipt of the last removal. It cannot help once the Trash has
+  been emptied, and it says so by not offering itself.
+- The scan for apps you have already removed only recognises reverse-DNS names, so a
+  vendor folder like `Application Support/Acme` is not attributed to a missing app.
