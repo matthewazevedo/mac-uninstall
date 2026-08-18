@@ -47,13 +47,19 @@ struct OrphanListView: View {
 
             // The honest caveat: an app on an external disk, or installed somewhere
             // this does not look, will show up here as though it were gone.
+            //
+            // Not `.fixedSize(horizontal: false, vertical: true)`: this header sits in
+            // a plain VStack above the list's own ScrollView, so nothing here absorbs
+            // a height the text demands but doesn't get. `fixedSize` did exactly that
+            // once before, in NoticeBanner (see the comment there) — the split view
+            // laid out past the window's top edge and the sidebar looked permanently
+            // scrolled down. Left to wrap normally, the text reports a height that fits.
             Text("""
                 Each of these is a bundle identifier with no installed app behind it. \
                 Nothing is pre-selected, and nothing is removed until you review it.
                 """)
                 .font(DS.TypeScale.secondary)
                 .foregroundStyle(DS.Palette.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(DS.Space.pane)
     }

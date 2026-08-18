@@ -98,8 +98,7 @@ public struct AppScanner: Sendable {
         let fm = FileManager.default
         guard fm.fileExists(atPath: bundleURL.path) else { return nil }
 
-        let infoPlistURL = bundleURL.appending(path: "Contents/Info.plist")
-        let info = Self.readPlist(at: infoPlistURL) ?? [:]
+        let info = Self.readInfo(at: bundleURL)
 
         let fallbackName = bundleURL.deletingPathExtension().lastPathComponent
         let displayName = (info["CFBundleDisplayName"] as? String)
@@ -171,10 +170,13 @@ public struct AppScanner: Sendable {
     /// Collects bundle identifiers of nested helpers, XPC services, and login items.
     /// These frequently own their own preference and cache files.
     ///
-    /// Only identifiers that share the app's own namespace are kept. Apps embed
-    /// third-party frameworks — Sparkle, Electron, crash reporters — whose bundle IDs
-    /// are shared across hundreds of unrelated apps. Treating those as evidence would
-    /// make uninstalling one app delete another app's data.
+    /// Only identifiers that share the app's own namespace are kept, with one
+    /// exception: a `SMPrivilegedExecutables` entry (see below) is trusted regardless
+    /// of namespace, because it is an explicit ownership declaration rather than a
+    /// guess. Everything else follows shared namespace — apps embed third-party
+    /// frameworks — Sparkle, Electron, crash reporters — whose bundle IDs are shared
+    /// across hundreds of unrelated apps. Treating those as evidence would make
+    /// uninstalling one app delete another app's data.
     static func nestedBundleIDs(in bundleURL: URL, ownedBy identity: AppIdentity) -> Set<String> {
         let fm = FileManager.default
         var ids: Set<String> = []
@@ -185,7 +187,13 @@ public struct AppScanner: Sendable {
             "Contents/PlugIns",
             "Contents/Helpers",
             "Contents/Frameworks",
+            // Some apps ship a nested installer here (e.g. `IVPN Installer.app`
+            // inside IVPN.app) that is what actually installs the privileged helper,
+            // rather than the top-level app itself.
+            "Contents/MacOS",
         ]
+
+        ids.formUnion(privilegedExecutableIDs(in: readInfo(at: bundleURL)))
 
         for dir in searchDirs {
             let url = bundleURL.appending(path: dir)
@@ -196,21 +204,25 @@ public struct AppScanner: Sendable {
             for entry in entries {
                 let ext = entry.pathExtension
                 guard ["app", "xpc", "appex", "bundle", "framework"].contains(ext) else { continue }
-                // Frameworks keep Info.plist at a different depth than apps.
-                let candidates = [
-                    entry.appending(path: "Contents/Info.plist"),
-                    entry.appending(path: "Resources/Info.plist"),
-                ]
-                for candidate in candidates {
-                    if let plist = readPlist(at: candidate),
-                       let id = plist["CFBundleIdentifier"] as? String {
-                        if belongsToApp(id, identity: identity) { ids.insert(id) }
-                        break
-                    }
+                let plist = readInfo(at: entry)
+                if let id = plist["CFBundleIdentifier"] as? String, belongsToApp(id, identity: identity) {
+                    ids.insert(id)
                 }
+                ids.formUnion(privilegedExecutableIDs(in: plist))
             }
         }
         return ids
+    }
+
+    /// `SMPrivilegedExecutables` is the app's own declaration of which privileged
+    /// helper tool it installs, keyed by the helper's bundle identifier — the
+    /// mechanism `SMJobBless` requires apps to use. A helper's bundle ID is
+    /// frequently in a different vendor namespace from the app that owns it (IVPN's
+    /// main app is `com.electron.ivpn-ui`; its helper is `net.ivpn.client.Helper`),
+    /// so this is trusted on its own rather than filtered through `belongsToApp`.
+    static func privilegedExecutableIDs(in info: [String: Any]) -> Set<String> {
+        guard let executables = info["SMPrivilegedExecutables"] as? [String: Any] else { return [] }
+        return Set(executables.keys)
     }
 
     /// True when a nested bundle identifier is genuinely part of this app's namespace
@@ -245,6 +257,16 @@ public struct AppScanner: Sendable {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
         return plist as? [String: Any]
+    }
+
+    /// Reads a bundle's `Info.plist` via `Bundle`, which understands every layout in
+    /// use — `Contents/Info.plist`, `Resources/Info.plist`, and the flat `Info.plist`
+    /// inside `Wrapper/<name>.app` that Catalyst and "Designed for iPad" apps use.
+    /// A hardcoded `Contents/Info.plist` path silently misses the last case, which
+    /// leaves the app's `bundleID` nil and makes every downstream match — including
+    /// its own `~/Library/Containers/<bundle id>` — fail.
+    static func readInfo(at bundleURL: URL) -> [String: Any] {
+        Bundle(url: bundleURL)?.infoDictionary ?? readPlist(at: bundleURL.appending(path: "Contents/Info.plist")) ?? [:]
     }
 
     static func runCodesign(on bundleURL: URL) -> String? {

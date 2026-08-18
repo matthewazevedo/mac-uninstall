@@ -15,6 +15,25 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        .toolbar {
+            // The only screens with their own way back are the ones with content —
+            // Cancel on a review, Done on a summary or the orphan list. The progress
+            // screens (scanning, finding orphans) have none at all, and even the
+            // screens that do have one only offer it after scrolling to it. This is
+            // the one way back that's always in the same place.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    model.startOver()
+                } label: {
+                    Image(systemName: "house")
+                }
+                .help("Start over")
+                // Removing and restoring are in flight on the helper or the
+                // filesystem; leaving would abandon the phase that reports how it
+                // went, not the operation itself, so it stays disabled until done.
+                .disabled(model.phase == .removing || model.phase == .restoring)
+            }
+        }
         .onDrop(of: [.fileURL], isTargeted: $model.isDropTargeted) { providers in
             handleDrop(providers)
         }

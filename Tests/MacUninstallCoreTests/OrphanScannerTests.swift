@@ -112,6 +112,32 @@ final class OrphanScannerTests: XCTestCase {
         XCTAssertTrue(groups.isEmpty, "Both belong to an installed vendor's namespace")
     }
 
+    /// A `.pkg` receipt's `PackageIdentifier` is Apple's installer namespace, not the
+    /// app's own `CFBundleIdentifier` — Tailscale's receipt is `com.tailscale.ipn.macsys`
+    /// for an app whose bundle ID is `io.tailscale.ipn.macsys`. No amount of prefix
+    /// matching bridges "com" to "io"; only the receipt's own `InstallPrefixPath`
+    /// says what it installed.
+    func testLeavesAReceiptAloneWhenItsInstallPrefixPathIsStillThere() async throws {
+        let receiptPlist = try make("Receipts/com.tailscale.ipn.macsys.plist")
+        _ = try make("Receipts/com.tailscale.ipn.macsys.bom")
+        let plist: [String: Any] = [
+            "InstallPrefixPath": "Applications/Tailscale.app",
+            "PackageIdentifier": "com.tailscale.ipn.macsys",
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: receiptPlist)
+
+        let tailscale = AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/Tailscale.app"),
+            bundleID: "io.tailscale.ipn.macsys",
+            displayName: "Tailscale"
+        )
+
+        let groups = await scanner(["Receipts": .receipts]).scan(installedApps: [tailscale])
+
+        XCTAssertTrue(groups.isEmpty, "The app this receipt installed is still there")
+    }
+
     func testIgnoresNamesThatIdentifyNothing() async throws {
         for name in ["Acme", "Updater", "com.acme", "Some File.txt", "logs"] {
             _ = try make("Application Support/\(name)", isDirectory: true)

@@ -36,6 +36,52 @@ final class AppDiscoveryTests: XCTestCase {
         Set(AppScanner().installedApps(in: roots).map(\.displayName))
     }
 
+    /// Catalyst and "Designed for iPad" apps put `Info.plist` directly inside
+    /// `Wrapper/<name>.app`, not under `Contents/`, and a `WrappedBundle` symlink at
+    /// the bundle root points there — that symlink, not the folder name, is what
+    /// `Bundle(url:)` actually follows to find it.
+    @discardableResult
+    private func makeWrappedApp(_ relative: String, bundleID: String) throws -> URL {
+        let outer = root.appending(path: relative)
+        let name = outer.deletingPathExtension().lastPathComponent
+        let inner = outer.appending(path: "Wrapper/\(name).app")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": bundleID,
+            "CFBundleName": name,
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: inner.appending(path: "Info.plist"))
+        try FileManager.default.createSymbolicLink(
+            atPath: outer.appending(path: "WrappedBundle").path,
+            withDestinationPath: "Wrapper/\(name).app"
+        )
+        return outer
+    }
+
+    /// IVPN's privileged helper is a real case: its bundle ID (`net.ivpn.client.Helper`)
+    /// shares no namespace with the app that owns it (`com.electron.ivpn-ui`) because
+    /// it's actually installed by a nested installer app (`IVPN Installer.app`, itself
+    /// `net.ivpn.client.installer`) sitting in `Contents/MacOS/`. Vendor-prefix
+    /// matching can never connect these three identifiers — only the installer's own
+    /// `SMPrivilegedExecutables` declaration says the helper belongs to this app.
+    func testCollectsAPrivilegedHelperDeclaredByANestedInstaller() throws {
+        let app = try makeApp("IVPN.app", bundleID: "com.electron.ivpn-ui")
+        let installerPlist = app.appending(path: "Contents/MacOS/IVPN Installer.app/Contents/Info.plist")
+        try FileManager.default.createDirectory(
+            at: installerPlist.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "net.ivpn.client.installer",
+            "SMPrivilegedExecutables": ["net.ivpn.client.Helper": "identifier net.ivpn.client.Helper"],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: installerPlist)
+
+        let identity = AppScanner().readIdentity(at: app)
+        XCTAssertTrue(identity?.helperBundleIDs.contains("net.ivpn.client.Helper") ?? false)
+    }
+
     /// The bug that started this: macOS marks /Applications/Safari.app hidden because
     /// it is a symlink into the Safari cryptex, so `.skipsHiddenFiles` dropped it.
     func testFindsAppsMarkedHidden() throws {
@@ -49,6 +95,18 @@ final class AppDiscoveryTests: XCTestCase {
             names([.init(root)]).contains("Hidden"),
             "An app flagged hidden is still an installed app"
         )
+    }
+
+    /// RidePack and Birdo ship this way: `Info.plist` lives at
+    /// `Foo.app/Wrapper/Foo.app/Info.plist`, not `Foo.app/Contents/Info.plist`. A
+    /// hardcoded `Contents/Info.plist` read leaves `bundleID` nil, which then makes
+    /// the app invisible to both the orphan scan (it looks removed) and its own
+    /// container match (`~/Library/Containers/<bundle id>` is never found).
+    func testReadsIdentityFromAWrappedCatalystBundle() throws {
+        let app = try makeWrappedApp("RidePack.app", bundleID: "com.ridepack.app")
+
+        let identity = AppScanner().readIdentity(at: app)
+        XCTAssertEqual(identity?.bundleID, "com.ridepack.app")
     }
 
     /// Vendors group products into folders; those apps are installed just the same.

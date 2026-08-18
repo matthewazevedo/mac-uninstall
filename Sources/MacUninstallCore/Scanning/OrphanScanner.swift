@@ -84,6 +84,10 @@ public struct OrphanScanner: Sendable {
             at: location.url, includingPropertiesForKeys: [.isDirectoryKey], options: []
         ) else { return [] }
 
+        let liveReceiptStems = location.category == .receipts
+            ? Self.liveReceiptStems(in: entries, live: live)
+            : []
+
         var found: [Leftover] = []
         for entry in entries {
             let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
@@ -93,6 +97,7 @@ public struct OrphanScanner: Sendable {
                   !Matcher.isAppleOwned(name: stem),
                   !live.claims(stem),
                   !live.claims(Self.normalized(stem)),
+                  !liveReceiptStems.contains(stem),
                   options.safetyCheck(entry) else { continue }
 
             found.append(Leftover(
@@ -106,6 +111,25 @@ public struct OrphanScanner: Sendable {
             ))
         }
         return found
+    }
+
+    /// A `.pkg` receipt's `PackageIdentifier` is Apple's installer namespace, which
+    /// vendors are free to keep entirely separate from their app's own
+    /// `CFBundleIdentifier` — Tailscale's receipt is `com.tailscale.ipn.macsys` for an
+    /// app whose bundle ID is `io.tailscale.ipn.macsys`. No bundle-ID heuristic
+    /// bridges that gap, so this reads what the receipt itself says it installed
+    /// (`InstallPrefixPath`) instead of guessing from its name. Read once per
+    /// directory rather than per file, because a receipt's sibling `.bom` carries the
+    /// same stem but isn't itself a plist.
+    static func liveReceiptStems(in entries: [URL], live: LiveIdentifiers) -> Set<String> {
+        var stems: Set<String> = []
+        for entry in entries where entry.pathExtension == "plist" {
+            guard let plist = AppScanner.readPlist(at: entry),
+                  let prefix = plist["InstallPrefixPath"] as? String,
+                  live.claimsPath("/" + prefix) else { continue }
+            stems.insert(Matcher.stem(of: entry.lastPathComponent, isDirectory: false))
+        }
+        return stems
     }
 
     static func grouped(_ leftovers: [Leftover]) -> [OrphanGroup] {
@@ -164,16 +188,25 @@ public struct OrphanScanner: Sendable {
 struct LiveIdentifiers: Sendable {
     private let identifiers: Set<String>
     private let prefixes: Set<String>
+    private let installedPaths: Set<String>
 
     init(apps: [AppIdentity]) {
         var identifiers: Set<String> = []
         var prefixes: Set<String> = []
+        var installedPaths: Set<String> = []
         for app in apps {
             for identifier in app.strongIdentifiers { identifiers.insert(identifier.lowercased()) }
             if let prefix = app.reverseDNSPrefix { prefixes.insert(prefix.lowercased()) }
+            installedPaths.insert(app.bundleURL.standardizedFileURL.path)
         }
         self.identifiers = identifiers
         self.prefixes = prefixes
+        self.installedPaths = installedPaths
+    }
+
+    /// True when `path` is exactly where a still-installed app lives.
+    func claimsPath(_ path: String) -> Bool {
+        installedPaths.contains(URL(fileURLWithPath: path).standardizedFileURL.path)
     }
 
     /// True when an installed app could plausibly own this name.
