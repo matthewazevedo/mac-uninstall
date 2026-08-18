@@ -1,3 +1,4 @@
+import MacUninstallAppCore
 import MacUninstallCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,6 +14,25 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
             detail
+        }
+        .toolbar {
+            // The only screens with their own way back are the ones with content —
+            // Cancel on a review, Done on a summary or the orphan list. The progress
+            // screens (scanning, finding orphans) have none at all, and even the
+            // screens that do have one only offer it after scrolling to it. This is
+            // the one way back that's always in the same place.
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    model.startOver()
+                } label: {
+                    Image(systemName: "house")
+                }
+                .help("Start over")
+                // Removing and restoring are in flight on the helper or the
+                // filesystem; leaving would abandon the phase that reports how it
+                // went, not the operation itself, so it stays disabled until done.
+                .disabled(model.phase == .removing || model.phase == .restoring)
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $model.isDropTargeted) { providers in
             handleDrop(providers)
@@ -48,6 +68,13 @@ struct ContentView: View {
                 EmptyStateView()
             case .scanning(let appName):
                 ScanningView(appName: appName)
+            case .findingOrphans:
+                ProgressPanel(
+                    title: "Looking for leftovers…",
+                    subtitle: "Reading the identifiers your Library holds, and subtracting the apps you still have."
+                )
+            case .orphans:
+                OrphanListView()
             case .reviewing:
                 if let result = model.scanResult {
                     ReviewView(result: result)
@@ -57,9 +84,14 @@ struct ContentView: View {
                     title: "Removing…",
                     subtitle: "Quitting the app and moving its files out of the way."
                 )
+            case .restoring:
+                ProgressPanel(
+                    title: "Putting it back…",
+                    subtitle: "Moving everything to where it came from."
+                )
             case .finished:
-                if let report = model.report, let result = model.scanResult {
-                    SummaryView(report: report, appName: result.identity.displayName)
+                if let report = model.report {
+                    SummaryView(report: report, title: model.summaryTitle, kind: model.lastAction)
                 }
             }
         }
@@ -113,6 +145,18 @@ struct EmptyStateView: View {
                 .font(DS.TypeScale.control)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .multilineTextAlignment(.center)
+
+            HStack(spacing: DS.Space.insideRow) {
+                // The case the sidebar cannot serve: the app is already gone, so
+                // there is no bundle left to scan from.
+                Button("Find leftovers from removed apps") { model.findOrphans() }
+
+                if let receipt = model.undoableReceipt {
+                    Button("Undo removing \(receipt.appName)") { model.undoLastRemoval() }
+                }
+            }
+            .buttonStyle(QuietButtonStyle(small: true))
+            .padding(.top, DS.Space.insideRow)
 
             if model.fullDiskAccess == .granted {
                 HStack(spacing: DS.Space.insideRow + 2) {

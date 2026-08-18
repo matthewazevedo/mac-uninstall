@@ -26,7 +26,7 @@ public enum RunningAppGuard {
             guard let appBundleID = app.bundleIdentifier?.lowercased() else {
                 // Match by bundle path when the process declares no identifier.
                 guard let url = app.bundleURL,
-                      url.standardizedFileURL.path.hasPrefix(identity.bundleURL.path) else { return nil }
+                      Self.isInside(url, bundle: identity.bundleURL) else { return nil }
                 return RunningProcess(
                     pid: app.processIdentifier,
                     name: app.localizedName ?? url.lastPathComponent,
@@ -36,9 +36,7 @@ public enum RunningAppGuard {
 
             let isExact = identity.strongIdentifiers.contains { appBundleID == $0.lowercased() }
             let isHelper = prefix.map { appBundleID.hasPrefix($0 + ".") } ?? false
-            let isSameBundle = app.bundleURL.map {
-                $0.standardizedFileURL.path.hasPrefix(identity.bundleURL.path)
-            } ?? false
+            let isSameBundle = app.bundleURL.map { Self.isInside($0, bundle: identity.bundleURL) } ?? false
 
             guard isExact || isHelper || isSameBundle else { return nil }
             return RunningProcess(
@@ -47,6 +45,17 @@ public enum RunningAppGuard {
                 bundleID: app.bundleIdentifier
             )
         }
+    }
+
+    /// True when `url` is the bundle itself or something inside it.
+    ///
+    /// The separator matters: a bare prefix test also matches `Acme.app.backup`,
+    /// which is a different app that happens to sort next to this one — the same
+    /// mistake ``Matcher`` refuses to make when matching identifiers.
+    static func isInside(_ url: URL, bundle: URL) -> Bool {
+        let candidate = url.standardizedFileURL.path
+        let root = bundle.standardizedFileURL.path
+        return candidate == root || candidate.hasPrefix(root + "/")
     }
 
     /// Asks the app to quit, then escalates to a forced termination.

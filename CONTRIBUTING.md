@@ -4,6 +4,17 @@ Build and test instructions live in the README's **Build and run** section. This
 covers the parts only a maintainer needs: cutting a release, and rehearsing an update
 before one goes out.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` builds all three products and runs the tests on a macOS
+runner for every branch and pull request. It needs no secrets and no approval, which is
+the point: the safety rules are the reason this app can be trusted to delete things, and
+until CI existed they were only exercised by the release workflow — which needs a `v*`
+tag and an environment approval, so a change could sit on a branch for days without ever
+being compiled.
+
+The release workflow still runs the same tests before it signs anything.
+
 ## Releasing
 
 Tag a version and the workflow in `.github/workflows/release.yml` builds, signs,

@@ -1,3 +1,4 @@
+import MacUninstallAppCore
 import MacUninstallCore
 import SwiftUI
 
@@ -48,7 +49,9 @@ struct ReviewView: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(result.leftovers.count) items")
                         .font(DS.TypeScale.bodyEmphasis)
-                    Text(result.isMeasuringSizes ? "Measuring…" : result.totalSizeBytes.formattedBytes)
+                    Text(result.isMeasuringSizes
+                         ? "Measuring…"
+                         : result.totalSizeBytes.formattedBytes(partial: result.totalSizeIsPartial))
                         .font(DS.TypeScale.mono)
                         .foregroundStyle(DS.Palette.textSecondary)
                 }
@@ -147,7 +150,8 @@ struct ReviewView: View {
     private var selectionSummary: String {
         let count = model.selectedLeftovers.count
         guard !result.isMeasuringSizes else { return "\(count) selected" }
-        return "\(count) selected · \(model.selectedSizeBytes.formattedBytes)"
+        let size = model.selectedSizeBytes.formattedBytes(partial: model.selectedSizeIsPartial)
+        return "\(count) selected · \(size)"
     }
 
     private var reversibilityNote: String {
@@ -196,7 +200,8 @@ struct CategoryHeader: View {
             Spacer()
             // "Zero KB" would claim a measurement that has not happened yet.
             Text(items.contains { $0.sizeBytes != nil }
-                 ? items.compactMap(\.sizeBytes).reduce(0, +).formattedBytes
+                 ? items.compactMap(\.sizeBytes).reduce(0, +)
+                     .formattedBytes(partial: items.contains { $0.sizeIsPartial })
                  : "—")
                 .font(DS.TypeScale.monoSmall)
                 .foregroundStyle(DS.Palette.textSecondary)
@@ -252,7 +257,7 @@ struct LeftoverRow: View {
 
             Spacer(minLength: 8)
 
-            Text(leftover.sizeBytes?.formattedBytes ?? "—")
+            Text(leftover.sizeDescription)
                 .font(DS.TypeScale.mono)
                 .foregroundStyle(DS.Palette.textSecondary)
         }

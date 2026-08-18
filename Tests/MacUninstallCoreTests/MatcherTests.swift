@@ -233,4 +233,26 @@ extension MatcherTests {
             .likely
         )
     }
+
+    /// Plenty of apps are `com.acme.app`, and their container is a folder of exactly
+    /// that name. Treating the last segment as a bundle extension reduced it to
+    /// `com.acme`, which matches the app's own identifier nowhere — so the app's
+    /// container was silently missed on every scan.
+    func testAnIdentifierEndingInAppIsNotMistakenForABundleName() {
+        let identity = AppIdentity(
+            bundleURL: URL(fileURLWithPath: "/Applications/Acme.app"),
+            bundleID: "com.acme.app",
+            displayName: "Acme"
+        )
+        let matcher = Matcher(identity: identity)
+
+        XCTAssertEqual(matcher.match(name: "com.acme.app", isDirectory: true)?.confidence, .certain)
+        XCTAssertEqual(matcher.match(name: "com.acme.app.plist", isDirectory: false)?.confidence, .certain)
+        XCTAssertEqual(matcher.match(name: "com.acme.app.helper", isDirectory: true)?.confidence, .certain)
+
+        // A real bundle still loses its extension: `Acme.app` is a name, not an
+        // identifier.
+        XCTAssertEqual(Matcher.stem(of: "Acme.app", isDirectory: true), "Acme")
+        XCTAssertEqual(Matcher.stem(of: "com.acme.app", isDirectory: true), "com.acme.app")
+    }
 }

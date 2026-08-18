@@ -6,16 +6,24 @@ public struct SearchLocation: Sendable {
     public var category: LeftoverCategory
     /// Removing items here needs elevation.
     public var requiresAdmin: Bool
-    /// When true, only direct children are considered; when false, the scanner
-    /// also inspects one level deeper. Preferences are flat; Application Support
-    /// nests vendor folders one level down.
-    public var childrenOnly: Bool
+    /// Whether a directory here may be a vendor folder holding one app's data among
+    /// several, in which case the scanner looks one level deeper and claims the
+    /// specific child rather than the shared parent.
+    ///
+    /// `Application Support/Google/Chrome` is the case this exists for. Preferences
+    /// are flat, so most locations leave it off.
+    public var descendsIntoVendorFolders: Bool
 
-    public init(url: URL, category: LeftoverCategory, requiresAdmin: Bool = false, childrenOnly: Bool = true) {
+    public init(
+        url: URL,
+        category: LeftoverCategory,
+        requiresAdmin: Bool = false,
+        descendsIntoVendorFolders: Bool = false
+    ) {
         self.url = url
         self.category = category
         self.requiresAdmin = requiresAdmin
-        self.childrenOnly = childrenOnly
+        self.descendsIntoVendorFolders = descendsIntoVendorFolders
     }
 }
 
@@ -31,14 +39,14 @@ public enum SearchLocations {
 
         var locations: [SearchLocation] = [
             // ---- User level -------------------------------------------------
-            .init(url: lib.appending(path: "Application Support"), category: .supportFiles, childrenOnly: false),
-            .init(url: lib.appending(path: "Caches"), category: .caches, childrenOnly: false),
-            .init(url: lib.appending(path: "Preferences"), category: .preferences, childrenOnly: false),
+            .init(url: lib.appending(path: "Application Support"), category: .supportFiles, descendsIntoVendorFolders: true),
+            .init(url: lib.appending(path: "Caches"), category: .caches, descendsIntoVendorFolders: true),
+            .init(url: lib.appending(path: "Preferences"), category: .preferences, descendsIntoVendorFolders: true),
             .init(url: lib.appending(path: "Preferences/ByHost"), category: .preferences),
             .init(url: lib.appending(path: "Containers"), category: .containers),
             .init(url: lib.appending(path: "Group Containers"), category: .containers),
             .init(url: lib.appending(path: "Application Scripts"), category: .containers),
-            .init(url: lib.appending(path: "Logs"), category: .logs, childrenOnly: false),
+            .init(url: lib.appending(path: "Logs"), category: .logs, descendsIntoVendorFolders: true),
             .init(url: lib.appending(path: "Saved Application State"), category: .savedState),
             .init(url: lib.appending(path: "HTTPStorages"), category: .cookiesAndStorage),
             .init(url: lib.appending(path: "WebKit"), category: .cookiesAndStorage),
@@ -57,10 +65,10 @@ public enum SearchLocations {
             .init(url: lib.appending(path: "Developer"), category: .supportFiles),
 
             // ---- Machine level (admin) -------------------------------------
-            .init(url: root.appending(path: "Application Support"), category: .supportFiles, requiresAdmin: true, childrenOnly: false),
-            .init(url: root.appending(path: "Caches"), category: .caches, requiresAdmin: true, childrenOnly: false),
+            .init(url: root.appending(path: "Application Support"), category: .supportFiles, requiresAdmin: true, descendsIntoVendorFolders: true),
+            .init(url: root.appending(path: "Caches"), category: .caches, requiresAdmin: true, descendsIntoVendorFolders: true),
             .init(url: root.appending(path: "Preferences"), category: .preferences, requiresAdmin: true),
-            .init(url: root.appending(path: "Logs"), category: .logs, requiresAdmin: true, childrenOnly: false),
+            .init(url: root.appending(path: "Logs"), category: .logs, requiresAdmin: true, descendsIntoVendorFolders: true),
             .init(url: root.appending(path: "LaunchAgents"), category: .launchItems, requiresAdmin: true),
             .init(url: root.appending(path: "LaunchDaemons"), category: .launchItems, requiresAdmin: true),
             .init(url: root.appending(path: "PrivilegedHelperTools"), category: .privilegedHelpers, requiresAdmin: true),

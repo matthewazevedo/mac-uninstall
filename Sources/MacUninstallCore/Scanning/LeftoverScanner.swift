@@ -42,13 +42,18 @@ public struct LeftoverScanner: Sendable {
         self.options = options
     }
 
+    /// What one location yielded.
+    private struct Sweep: Sendable {
+        var leftovers: [Leftover] = []
+        var inaccessible: [URL] = []
+    }
+
     /// Finds everything belonging to `identity`, including the bundle itself.
     public func scan(for identity: AppIdentity) async -> ScanResult {
         let matcher = Matcher(identity: identity)
         let fm = FileManager.default
 
         var leftovers: [Leftover] = []
-        var inaccessible: [URL] = []
         var claimed: Set<String> = []
 
         // The application bundle is part of its own footprint, unless macOS protects
@@ -72,88 +77,26 @@ public struct LeftoverScanner: Sendable {
             claimed.insert(identity.bundleURL.standardizedFileURL.path)
         }
 
-        for location in locations {
-            guard let entries = try? fm.contentsOfDirectory(
-                at: location.url,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: []
-            ) else {
-                // Distinguish "cannot read" from "does not exist"; only the former
-                // means the report is incomplete.
-                if fm.fileExists(atPath: location.url.path) {
-                    inaccessible.append(location.url)
-                }
-                continue
-            }
-
-            for entry in entries {
-                let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                let path = entry.standardizedFileURL.path
-                guard !claimed.contains(path) else { continue }
-
-                let parentMatch = matcher.match(name: entry.lastPathComponent, isDirectory: isDirectory)
-
-                // A confident match is the app's own folder — take it whole rather
-                // than descending into files it exclusively owns.
-                if let parentMatch, parentMatch.confidence >= .likely {
-                    guard options.safetyCheck(entry) else { continue }
-                    claimed.insert(path)
-                    leftovers.append(Leftover(
-                        url: entry,
-                        category: location.category,
-                        confidence: parentMatch.confidence,
-                        reason: parentMatch.reason,
-                        requiresAdmin: location.requiresAdmin
-                    ))
-                    continue
-                }
-
-                // Otherwise look one level deeper. A vendor folder such as
-                // `Application Support/Google` is shared, so a specific child like
-                // `Google/Chrome` must win over claiming the whole parent — deleting
-                // the parent would take Google Drive's data with it.
-                if !location.childrenOnly && isDirectory {
-                    if let nested = scanOneLevel(
-                        in: entry, matcher: matcher, location: location, claimed: &claimed
-                    ), !nested.isEmpty {
-                        leftovers.append(contentsOf: nested)
-                        continue
-                    }
-                }
-
-                // No specific child matched, so fall back to the vendor-level hit.
-                // It stays low confidence and is never pre-selected.
-                if let parentMatch {
-                    guard options.safetyCheck(entry) else { continue }
-                    claimed.insert(path)
-                    leftovers.append(Leftover(
-                        url: entry,
-                        category: location.category,
-                        confidence: parentMatch.confidence,
-                        reason: parentMatch.reason,
-                        requiresAdmin: location.requiresAdmin
-                    ))
-                    continue
-                }
-
-                // Content-based evidence for names that look like nothing.
-                if options.deepInspectPlists,
-                   !isDirectory,
-                   entry.pathExtension.lowercased() == "plist",
-                   let reason = deepEvidence(in: entry, identity: identity) {
-                    guard options.safetyCheck(entry) else { continue }
-                    claimed.insert(path)
-                    leftovers.append(Leftover(
-                        url: entry,
-                        category: location.category,
-                        // A file that merely mentions the app is weaker evidence than
-                        // one named after it, so this always needs a human decision.
-                        confidence: .possible,
-                        reason: reason,
-                        requiresAdmin: location.requiresAdmin
-                    ))
+        // Locations are swept concurrently. They are separate directory trees, so no
+        // sweep can claim what another one found, and the work is almost entirely
+        // spent waiting on the filesystem. Completion order is not allowed to matter:
+        // the results are sorted and de-duplicated afterwards.
+        let alreadyClaimed = claimed
+        let sweeps = await withTaskGroup(of: Sweep.self) { group in
+            for location in locations {
+                group.addTask {
+                    self.sweep(location, matcher: matcher, identity: identity, claimed: alreadyClaimed)
                 }
             }
+            var results: [Sweep] = []
+            for await sweep in group { results.append(sweep) }
+            return results
+        }
+
+        var inaccessible: [URL] = []
+        for sweep in sweeps {
+            leftovers.append(contentsOf: sweep.leftovers)
+            inaccessible.append(contentsOf: sweep.inaccessible)
         }
 
         if options.measureSizes {
@@ -162,9 +105,113 @@ public struct LeftoverScanner: Sendable {
 
         return ScanResult(
             identity: identity,
-            leftovers: leftovers.sorted { ($0.confidence, $0.url.path) > ($1.confidence, $1.url.path) },
-            inaccessibleLocations: inaccessible
+            leftovers: Self.ordered(leftovers),
+            inaccessibleLocations: inaccessible.sorted { $0.path < $1.path }
         )
+    }
+
+    /// Strongest evidence first, with any path that turned up twice kept once.
+    static func ordered(_ leftovers: [Leftover]) -> [Leftover] {
+        var seen: Set<String> = []
+        return leftovers
+            .sorted { ($0.confidence, $0.url.path) > ($1.confidence, $1.url.path) }
+            .filter { seen.insert($0.url.standardizedFileURL.path).inserted }
+    }
+
+    private func sweep(
+        _ location: SearchLocation,
+        matcher: Matcher,
+        identity: AppIdentity,
+        claimed: Set<String>
+    ) -> Sweep {
+        let fm = FileManager.default
+        var claimed = claimed
+        var sweep = Sweep()
+
+        guard let entries = try? fm.contentsOfDirectory(
+            at: location.url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else {
+            // Distinguish "cannot read" from "does not exist"; only the former
+            // means the report is incomplete.
+            if fm.fileExists(atPath: location.url.path) {
+                sweep.inaccessible.append(location.url)
+            }
+            return sweep
+        }
+
+        for entry in entries {
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let path = entry.standardizedFileURL.path
+            guard !claimed.contains(path) else { continue }
+
+            let parentMatch = matcher.match(name: entry.lastPathComponent, isDirectory: isDirectory)
+
+            // A confident match is the app's own folder — take it whole rather
+            // than descending into files it exclusively owns.
+            if let parentMatch, parentMatch.confidence >= .likely {
+                guard options.safetyCheck(entry) else { continue }
+                claimed.insert(path)
+                sweep.leftovers.append(Leftover(
+                    url: entry,
+                    category: location.category,
+                    confidence: parentMatch.confidence,
+                    reason: parentMatch.reason,
+                    requiresAdmin: location.requiresAdmin
+                ))
+                continue
+            }
+
+            // Otherwise look one level deeper. A vendor folder such as
+            // `Application Support/Google` is shared, so a specific child like
+            // `Google/Chrome` must win over claiming the whole parent — deleting
+            // the parent would take Google Drive's data with it.
+            if location.descendsIntoVendorFolders && isDirectory {
+                let nested = scanOneLevel(
+                    in: entry, matcher: matcher, location: location, claimed: &claimed
+                )
+                if !nested.isEmpty {
+                    sweep.leftovers.append(contentsOf: nested)
+                    continue
+                }
+            }
+
+            // No specific child matched, so fall back to the vendor-level hit.
+            // It stays low confidence and is never pre-selected.
+            if let parentMatch {
+                guard options.safetyCheck(entry) else { continue }
+                claimed.insert(path)
+                sweep.leftovers.append(Leftover(
+                    url: entry,
+                    category: location.category,
+                    confidence: parentMatch.confidence,
+                    reason: parentMatch.reason,
+                    requiresAdmin: location.requiresAdmin
+                ))
+                continue
+            }
+
+            // Content-based evidence for names that look like nothing.
+            if options.deepInspectPlists,
+               !isDirectory,
+               entry.pathExtension.lowercased() == "plist",
+               let reason = deepEvidence(in: entry, identity: identity) {
+                guard options.safetyCheck(entry) else { continue }
+                claimed.insert(path)
+                sweep.leftovers.append(Leftover(
+                    url: entry,
+                    category: location.category,
+                    // A file that merely mentions the app is weaker evidence than
+                    // one named after it, so this always needs a human decision.
+                    confidence: .possible,
+                    reason: reason,
+                    requiresAdmin: location.requiresAdmin
+                ))
+            }
+        }
+
+        return sweep
     }
 
     /// Looks inside a vendor folder for a subfolder belonging to this app.
@@ -176,11 +223,11 @@ public struct LeftoverScanner: Sendable {
         matcher: Matcher,
         location: SearchLocation,
         claimed: inout Set<String>
-    ) -> [Leftover]? {
+    ) -> [Leftover] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: []
-        ) else { return nil }
+        ) else { return [] }
 
         var found: [Leftover] = []
         for entry in entries {
@@ -198,7 +245,7 @@ public struct LeftoverScanner: Sendable {
                 requiresAdmin: location.requiresAdmin
             ))
         }
-        return found.isEmpty ? nil : found
+        return found
     }
 
     /// Reads a plist and reports whether it references the app's identifier or path.
@@ -244,18 +291,19 @@ public struct LeftoverScanner: Sendable {
     }
 
     private func measure(_ leftovers: [Leftover]) async -> [Leftover] {
-        await withTaskGroup(of: (String, Int64?).self) { group in
+        await withTaskGroup(of: (String, DiskSize.Measurement?).self) { group in
             for leftover in leftovers {
                 let url = leftover.url
                 group.addTask { (url.path, DiskSize.ofItem(at: url)) }
             }
-            var sizes: [String: Int64] = [:]
+            var sizes: [String: DiskSize.Measurement] = [:]
             for await (path, size) in group {
                 if let size { sizes[path] = size }
             }
             return leftovers.map { item in
                 var item = item
-                item.sizeBytes = sizes[item.url.path]
+                item.sizeBytes = sizes[item.url.path]?.bytes
+                item.sizeIsPartial = sizes[item.url.path]?.isPartial ?? false
                 return item
             }
         }
@@ -264,16 +312,34 @@ public struct LeftoverScanner: Sendable {
 
 /// Size measurement with a hard bound, so a scan cannot stall on a huge tree.
 enum DiskSize {
-    static let maxEntriesPerItem = 20_000
 
-    static func ofItem(at url: URL) -> Int64? {
+    /// Reached only by trees like a node_modules folder or a browser cache. High
+    /// enough that ordinary app data is measured exactly; bounded so one pathological
+    /// item cannot hold up the whole list.
+    static let maxEntriesPerItem = 100_000
+
+    struct Measurement: Sendable {
+        var bytes: Int64
+        /// True when the walk stopped at its bound before the tree ended, so the
+        /// number is a floor. A confident wrong total is worse than an honest one:
+        /// the whole point of the review screen is that its numbers can be trusted.
+        var isPartial: Bool
+    }
+
+    /// - Parameter limit: How many entries to walk before giving up and reporting a
+    ///   floor. Injectable so the bounded case can be tested without building a tree
+    ///   of a hundred thousand files.
+    static func ofItem(at url: URL, limit: Int = maxEntriesPerItem) -> Measurement? {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return nil }
 
         if !isDirectory.boolValue {
             let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
-            return Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            return Measurement(
+                bytes: Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0),
+                isPartial: false
+            )
         }
 
         guard let enumerator = fm.enumerator(
@@ -284,14 +350,18 @@ enum DiskSize {
 
         var total: Int64 = 0
         var count = 0
+        var isPartial = false
         for case let child as URL in enumerator {
             count += 1
-            if count > maxEntriesPerItem { break }
+            if count > limit {
+                isPartial = true
+                break
+            }
             guard let values = try? child.resourceValues(
                 forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
             ), values.isRegularFile == true else { continue }
             total += Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
         }
-        return total
+        return Measurement(bytes: total, isPartial: isPartial)
     }
 }

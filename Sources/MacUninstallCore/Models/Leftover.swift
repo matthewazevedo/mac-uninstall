@@ -68,6 +68,9 @@ public struct Leftover: Sendable, Identifiable, Hashable, Codable {
     public var reason: String
     /// Total size on disk in bytes, or `nil` if it could not be measured.
     public var sizeBytes: Int64?
+    /// True when measuring stopped at its bound, so ``sizeBytes`` is a floor rather
+    /// than a total and the UI has to say "at least" rather than a flat number.
+    public var sizeIsPartial: Bool
     /// True when the current user cannot remove this without elevation.
     public var requiresAdmin: Bool
 
@@ -77,6 +80,7 @@ public struct Leftover: Sendable, Identifiable, Hashable, Codable {
         confidence: Confidence,
         reason: String,
         sizeBytes: Int64? = nil,
+        sizeIsPartial: Bool = false,
         requiresAdmin: Bool = false
     ) {
         self.url = url
@@ -84,6 +88,7 @@ public struct Leftover: Sendable, Identifiable, Hashable, Codable {
         self.confidence = confidence
         self.reason = reason
         self.sizeBytes = sizeBytes
+        self.sizeIsPartial = sizeIsPartial
         self.requiresAdmin = requiresAdmin
     }
 }
@@ -104,6 +109,11 @@ public struct ScanResult: Sendable, Codable {
 
     public var totalSizeBytes: Int64 {
         leftovers.compactMap(\.sizeBytes).reduce(0, +)
+    }
+
+    /// True when any item's size is a floor, so the total is one too.
+    public var totalSizeIsPartial: Bool {
+        leftovers.contains { $0.sizeIsPartial }
     }
 
     /// True when some locations were unreadable, meaning we cannot honestly

@@ -6,11 +6,24 @@ public struct RemovalOutcome: Sendable, Identifiable {
     public var url: URL
     public var succeeded: Bool
     public var message: String?
+    /// Where the item is now — its place in the Trash, or in the quarantine folder.
+    /// `nil` when nothing moved, which is also what makes an outcome unrestorable.
+    public var currentLocation: URL?
+    /// True when putting this item back needs elevation.
+    public var wasQuarantined: Bool
 
-    public init(url: URL, succeeded: Bool, message: String? = nil) {
+    public init(
+        url: URL,
+        succeeded: Bool,
+        message: String? = nil,
+        currentLocation: URL? = nil,
+        wasQuarantined: Bool = false
+    ) {
         self.url = url
         self.succeeded = succeeded
         self.message = message
+        self.currentLocation = currentLocation
+        self.wasQuarantined = wasQuarantined
     }
 }
 
@@ -18,9 +31,19 @@ public struct RemovalReport: Sendable {
     public var outcomes: [RemovalOutcome]
     public var quarantineDirectory: URL?
 
+    public init(outcomes: [RemovalOutcome], quarantineDirectory: URL? = nil) {
+        self.outcomes = outcomes
+        self.quarantineDirectory = quarantineDirectory
+    }
+
     public var succeeded: [RemovalOutcome] { outcomes.filter(\.succeeded) }
     public var failed: [RemovalOutcome] { outcomes.filter { !$0.succeeded } }
     public var isFullSuccess: Bool { failed.isEmpty }
+
+    /// Items that moved somewhere they can be brought back from.
+    public var restorable: [RemovalOutcome] {
+        outcomes.filter { $0.succeeded && $0.currentLocation != nil }
+    }
 }
 
 /// Removes leftovers, reversibly.
@@ -83,7 +106,10 @@ public struct Remover: Sendable {
         }
 
         if options.unloadLaunchItems {
-            await unloadLaunchJobs(in: leftovers)
+            // Only the items that survived validation. A path this method just refused
+            // to touch must not have its job booted out either — the rejection is the
+            // gate everything passes through, not a filter on one step of the work.
+            await unloadLaunchJobs(in: userItems + privilegedItems)
         }
 
         // The Trash is where people expect their files, and Finder's Put Back only
@@ -110,6 +136,93 @@ public struct Remover: Sendable {
         return RemovalReport(outcomes: outcomes, quarantineDirectory: quarantineDirectory)
     }
 
+    // MARK: - Undo
+
+    /// Moves everything in a receipt back where it came from.
+    ///
+    /// The destination is revalidated against ``ProtectedPaths`` exactly as a removal
+    /// is: a receipt is a file on disk, and "put this back" must not become a way to
+    /// write anywhere on the system.
+    public func restore(_ receipt: RemovalReceipt) async -> RemovalReport {
+        let fm = FileManager.default
+        var outcomes: [RemovalOutcome] = []
+        var requests: [RestoreRequest] = []
+
+        for item in receipt.items {
+            let original = URL(fileURLWithPath: item.originalPath)
+            let current = URL(fileURLWithPath: item.currentPath)
+
+            if let rejection = ProtectedPaths.rejection(for: original) {
+                outcomes.append(RemovalOutcome(
+                    url: original,
+                    succeeded: false,
+                    message: RemovalError.refusedUnsafePath(original, rejection).localizedDescription
+                ))
+                continue
+            }
+            guard fm.fileExists(atPath: current.path) else {
+                outcomes.append(RemovalOutcome(
+                    url: original,
+                    succeeded: false,
+                    message: "No longer where it was left — it may have been emptied from the Trash."
+                ))
+                continue
+            }
+            // Never overwrite: the app may have been reinstalled since.
+            guard !fm.fileExists(atPath: original.path) else {
+                outcomes.append(RemovalOutcome(
+                    url: original,
+                    succeeded: false,
+                    message: "Something is already at that location."
+                ))
+                continue
+            }
+
+            guard !item.wasQuarantined else {
+                requests.append(RestoreRequest(
+                    quarantinedPath: current.path, originalPath: original.path
+                ))
+                continue
+            }
+
+            do {
+                try fm.createDirectory(
+                    at: original.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                try fm.moveItem(at: current, to: original)
+                outcomes.append(RemovalOutcome(url: original, succeeded: true, message: "Put back."))
+            } catch {
+                outcomes.append(RemovalOutcome(
+                    url: original, succeeded: false, message: error.localizedDescription
+                ))
+            }
+        }
+
+        guard !requests.isEmpty else { return RemovalReport(outcomes: outcomes) }
+
+        do {
+            let failures = try await privileged.restore(requests)
+            for request in requests {
+                let url = URL(fileURLWithPath: request.originalPath)
+                if let message = failures[request.originalPath] {
+                    outcomes.append(RemovalOutcome(url: url, succeeded: false, message: message))
+                } else {
+                    outcomes.append(RemovalOutcome(url: url, succeeded: true, message: "Put back."))
+                }
+            }
+        } catch {
+            for request in requests {
+                outcomes.append(RemovalOutcome(
+                    url: URL(fileURLWithPath: request.originalPath),
+                    succeeded: false,
+                    message: error.localizedDescription
+                ))
+            }
+        }
+
+        return RemovalReport(outcomes: outcomes)
+    }
+
     // MARK: - User-level
 
     private func trash(_ url: URL) -> RemovalOutcome {
@@ -133,7 +246,14 @@ public struct Remover: Sendable {
         do {
             var resulting: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
-            return RemovalOutcome(url: url, succeeded: true, message: "Moved to Trash.")
+            return RemovalOutcome(
+                url: url,
+                succeeded: true,
+                message: "Moved to Trash.",
+                // Finder renames on a collision, so where it actually landed is the
+                // only thing an undo can rely on.
+                currentLocation: resulting.map { $0 as URL }
+            )
         } catch {
             return nil
         }
@@ -170,15 +290,18 @@ public struct Remover: Sendable {
     /// and not at all once the helper daemon is approved.
     private func quarantine(_ items: [Leftover], into directory: URL) async -> [RemovalOutcome] {
         do {
-            let failures = try await privileged.quarantine(items: items.map(\.url), into: directory)
+            let result = try await privileged.quarantine(items: items.map(\.url), into: directory)
             return items.map { item in
-                if let message = failures[item.url.path] {
+                if let message = result.failures[item.url.path] {
                     return RemovalOutcome(url: item.url, succeeded: false, message: message)
                 }
+                let landed = result.destinations[item.url.path].map { URL(fileURLWithPath: $0) }
                 return RemovalOutcome(
                     url: item.url,
                     succeeded: true,
-                    message: "Moved to quarantine at \(directory.path)."
+                    message: "Moved to quarantine at \(directory.path).",
+                    currentLocation: landed,
+                    wasQuarantined: true
                 )
             }
         } catch {
@@ -200,8 +323,11 @@ public struct Remover: Sendable {
             if isDaemon {
                 // Needs elevation. Failure is non-fatal: the file is still removed and
                 // the job cannot survive a reboot without it.
-                try? await privileged.bootout(label: label, isDaemon: true)
+                try? await privileged.bootoutDaemon(label: label)
             } else {
+                // A user agent is in this process's own launchd domain, so no
+                // elevation is involved and none should be asked for.
+                guard HelperValidation.isValidLaunchdLabel(label) else { continue }
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
                 process.arguments = ["bootout", "gui/\(getuid())/\(label)"]

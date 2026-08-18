@@ -116,7 +116,20 @@ public struct Matcher: Sendable {
             )
         }
 
-        // 5. Vendor-level folders. Shared with the vendor's other products, so
+        // 5. Team identifier prefixes, used by group containers such as
+        //    `Q6L2SF6YDW.com.acme.shared`.
+        //
+        //    Ahead of the vendor rule because the first hit wins and this one is the
+        //    stronger evidence: a team identifier is issued by Apple to one developer,
+        //    while a vendor name is a guess at a folder title.
+        if let team = identity.teamID?.lowercased(), loweredStem.hasPrefix(team + ".") {
+            return Match(
+                confidence: .likely,
+                reason: "Registered to the developer team \(identity.teamID ?? team)."
+            )
+        }
+
+        // 6. Vendor-level folders. Shared with the vendor's other products, so
         //    this is surfaced for review and never auto-selected.
         for vendor in identity.vendorNames where Self.isDistinctive(vendor) {
             if loweredStem == vendor.lowercased()
@@ -126,15 +139,6 @@ public struct Matcher: Sendable {
                     reason: "Belongs to the vendor \(vendor). Other apps from the same vendor may share it."
                 )
             }
-        }
-
-        // 6. Team identifier prefixes, used by group containers such as
-        //    `Q6L2SF6YDW.com.acme.shared`.
-        if let team = identity.teamID?.lowercased(), loweredStem.hasPrefix(team + ".") {
-            return Match(
-                confidence: .likely,
-                reason: "Registered to the developer team \(identity.teamID ?? team)."
-            )
         }
 
         return nil
@@ -160,10 +164,28 @@ public struct Matcher: Sendable {
         ]
         var stem = name
         for ext in strippable where stem.lowercased().hasSuffix(ext.lowercased()) {
+            // `.app` is the one entry here that is also a legitimate last segment of
+            // a bundle identifier. Plenty of apps are `com.acme.app`, and their
+            // container is a folder of exactly that name — stripping it left
+            // `com.acme`, which matches the app's own identifier nowhere, so the
+            // container was silently missed on every scan.
+            if ext == ".app" && looksLikeBundleIdentifier(stem) { break }
             stem = String(stem.dropLast(ext.count))
             break
         }
         return stem
+    }
+
+    /// True for reverse-DNS names, which identify an app on their own. `Acme` or
+    /// `Updater` could belong to anything.
+    static func looksLikeBundleIdentifier(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return false }
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.allSatisfy { character in
+                character.isLetter || character.isNumber || character == "-" || character == "_"
+            }
+        }
     }
 
     /// Rejects names that are too short or too common to be evidence.

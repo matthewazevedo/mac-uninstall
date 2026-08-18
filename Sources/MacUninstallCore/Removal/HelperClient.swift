@@ -174,21 +174,35 @@ public actor HelperClient: PrivilegedExecutor {
         }
     }
 
-    public func quarantine(items: [URL], into directory: URL) async throws -> [String: String] {
-        guard !items.isEmpty else { return [:] }
+    public func quarantine(items: [URL], into directory: URL) async throws -> QuarantineResult {
+        guard !items.isEmpty else { return QuarantineResult() }
         let paths = items.map(\.path)
         let destination = directory.path
 
         return try await withProxy { proxy, finish in
-            proxy.quarantine(paths: paths, into: destination) { failures in
+            proxy.quarantine(paths: paths, into: destination) { failures, destinations in
+                finish(.success(QuarantineResult(failures: failures, destinations: destinations)))
+            }
+        }
+    }
+
+    public func restore(_ items: [RestoreRequest]) async throws -> [String: String] {
+        guard !items.isEmpty else { return [:] }
+        let mapping = Dictionary(
+            items.map { ($0.quarantinedPath, $0.originalPath) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        return try await withProxy { proxy, finish in
+            proxy.restore(items: mapping) { failures in
                 finish(.success(failures))
             }
         }
     }
 
-    public func bootout(label: String, isDaemon: Bool) async throws {
+    public func bootoutDaemon(label: String) async throws {
         let _: String? = try await withProxy { proxy, finish in
-            proxy.bootout(label: label, isDaemon: isDaemon) { message in
+            proxy.bootoutDaemon(label: label) { message in
                 finish(.success(message))
             }
         }
@@ -219,7 +233,7 @@ public struct AdaptivePrivilegedExecutor: PrivilegedExecutor {
         self.fallback = fallback
     }
 
-    public func quarantine(items: [URL], into directory: URL) async throws -> [String: String] {
+    public func quarantine(items: [URL], into directory: URL) async throws -> QuarantineResult {
         if HelperClient.status.isUsable {
             do {
                 return try await helper.quarantine(items: items, into: directory)
@@ -230,10 +244,21 @@ public struct AdaptivePrivilegedExecutor: PrivilegedExecutor {
         return try await fallback.quarantine(items: items, into: directory)
     }
 
-    public func bootout(label: String, isDaemon: Bool) async throws {
+    public func restore(_ items: [RestoreRequest]) async throws -> [String: String] {
         if HelperClient.status.isUsable {
-            if (try? await helper.bootout(label: label, isDaemon: isDaemon)) != nil { return }
+            do {
+                return try await helper.restore(items)
+            } catch {
+                // Same reasoning as quarantine: a prompt beats a failed restore.
+            }
         }
-        try await fallback.bootout(label: label, isDaemon: isDaemon)
+        return try await fallback.restore(items)
+    }
+
+    public func bootoutDaemon(label: String) async throws {
+        if HelperClient.status.isUsable {
+            if (try? await helper.bootoutDaemon(label: label)) != nil { return }
+        }
+        try await fallback.bootoutDaemon(label: label)
     }
 }
