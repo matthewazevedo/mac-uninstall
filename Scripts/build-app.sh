@@ -73,8 +73,18 @@ echo "==> Signing identity: $IDENTITY  [$IDENTITY_KIND]"
 # ------------------------------------------------------------------- build ----
 
 echo "==> Building ($CONFIG)"
-swift build -c "$CONFIG" --package-path "$ROOT" --product "$APP_NAME"
-swift build -c "$CONFIG" --package-path "$ROOT" --product "$HELPER_ID"
+# Record the SDK the app was actually built against. macOS decides whether an app
+# gets the current system design (Liquid Glass on macOS 26 and later) from the SDK
+# version stamped into the binary, not from the SDK used to compile it. Some
+# toolchains stamp the deployment target there instead — the app then compiles
+# against the macOS 27 SDK but is labelled 14.0 and drawn in the old style. Passing
+# the version to the linker explicitly makes the label match the SDK.
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+MIN_MACOS="14.0"   # Keep in step with `platforms` in Package.swift.
+LINK_FLAGS=(-Xlinker -platform_version -Xlinker macos -Xlinker "$MIN_MACOS" -Xlinker "$SDK_VERSION")
+echo "    SDK $SDK_VERSION, minimum macOS $MIN_MACOS"
+swift build -c "$CONFIG" --package-path "$ROOT" --product "$APP_NAME" "${LINK_FLAGS[@]}"
+swift build -c "$CONFIG" --package-path "$ROOT" --product "$HELPER_ID" "${LINK_FLAGS[@]}"
 BIN_DIR="$(swift build -c "$CONFIG" --package-path "$ROOT" --show-bin-path)"
 
 # Both versions come from the git tag, because the tag is what the release workflow

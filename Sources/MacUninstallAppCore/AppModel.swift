@@ -51,6 +51,10 @@ public final class AppModel {
     /// True while the review screen is showing orphans rather than an installed app.
     private var isOrphanTarget = false
 
+    /// Bumped whenever the user navigates away. A scan that finishes after that
+    /// belongs to a screen they already left, so it must not pull them back to it.
+    private var navigationGeneration = 0
+
     private let scanner = AppScanner()
     private let receipts = ReceiptStore()
 
@@ -220,6 +224,8 @@ public final class AppModel {
         phase = .scanning(appName: identity.displayName)
 
         let scanner = self.scanner
+        let known = installedApps
+        let generation = navigationGeneration
         Task {
             // Signature lookup and the sweep are both blocking work; keep them off
             // the main actor so the progress UI stays responsive.
@@ -228,10 +234,28 @@ public final class AppModel {
             // folder takes seconds, and the list is useful the moment it exists.
             let result = await Task.detached { () -> ScanResult in
                 let enriched = scanner.enrichWithSignature(identity)
-                return await LeftoverScanner(options: .init(measureSizes: false))
+                var result = await LeftoverScanner(options: .init(measureSizes: false))
                     .scan(for: enriched)
+
+                // A vendor's apps share group containers, and the team-ID rule that
+                // finds them cannot tell whose they are. Anything another installed
+                // app is entitled to stays put.
+                let target = identity.bundleURL.standardizedFileURL.path
+                let apps = known.isEmpty ? scanner.installedApps() : known
+                let others = apps
+                    .filter { $0.bundleURL.standardizedFileURL.path != target }
+                    .compactMap { app in
+                        SigningInfo.read(bundleURL: app.bundleURL).map {
+                            SharedContainers.OtherApp(name: app.displayName, signing: $0)
+                        }
+                    }
+                let split = SharedContainers.partition(result.leftovers, usedBy: others)
+                result.leftovers = split.kept
+                result.sharedWithOtherApps = split.shared
+                return result
             }.value
 
+            guard generation == self.navigationGeneration else { return }
             self.scanResult = result
             self.selectedPaths = Set(
                 result.leftovers.filter { $0.confidence.selectedByDefault }.map(\.id)
@@ -257,6 +281,7 @@ public final class AppModel {
 
         let scanner = self.scanner
         let known = installedApps
+        let generation = navigationGeneration
         Task {
             let groups = await Task.detached { () -> [OrphanGroup] in
                 var apps = known.isEmpty ? scanner.installedApps() : known
@@ -272,6 +297,7 @@ public final class AppModel {
                 return await OrphanScanner().scan(installedApps: apps)
             }.value
 
+            guard generation == self.navigationGeneration else { return }
             self.orphanGroups = groups
             self.phase = .orphans
         }
@@ -432,14 +458,52 @@ public final class AppModel {
         }
     }
 
-    public func startOver() {
+    // MARK: - Navigation
+
+    /// False on the start screen, where there is nowhere to go back to, and while a
+    /// removal or restore is running: leaving would abandon the screen that reports
+    /// how it went, not the operation itself.
+    public var canGoBack: Bool {
+        switch phase {
+        case .idle, .removing, .restoring: false
+        default: true
+        }
+    }
+
+    public var canGoHome: Bool { canGoBack }
+
+    /// One step back.
+    ///
+    /// Reviewing a group of orphans goes back to the list it was opened from, rather
+    /// than making the user search again. Everything else is one step from the start
+    /// screen, and going back from a scan in progress abandons it.
+    public func goBack() {
+        guard canGoBack else { return }
+        if phase == .reviewing, isOrphanTarget, !orphanGroups.isEmpty {
+            leaveCurrentScreen()
+            phase = .orphans
+        } else {
+            goHome()
+        }
+    }
+
+    /// Straight to the start screen, from anywhere.
+    ///
+    /// Unlike ``goBack()`` this also forgets the orphan list: Home means starting
+    /// over, and a list built before now may describe files that have since changed.
+    public func goHome() {
+        guard canGoHome else { return }
+        leaveCurrentScreen()
+        orphanGroups = []
+        phase = .idle
+    }
+
+    private func leaveCurrentScreen() {
+        navigationGeneration += 1
         scanResult = nil
         selectedPaths = []
         report = nil
         errorMessage = nil
-        // Cancelling out of a group of orphans goes back to the list it came from,
-        // rather than making the user run the search again.
-        phase = (isOrphanTarget && !orphanGroups.isEmpty) ? .orphans : .idle
         isOrphanTarget = false
         refreshPermissions()
         refreshHelperStatus()

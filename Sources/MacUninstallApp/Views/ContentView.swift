@@ -16,22 +16,32 @@ struct ContentView: View {
             detail
         }
         .toolbar {
-            // The only screens with their own way back are the ones with content —
+            // The only screens with their own way out are the ones with content —
             // Cancel on a review, Done on a summary or the orphan list. The progress
-            // screens (scanning, finding orphans) have none at all, and even the
-            // screens that do have one only offer it after scrolling to it. This is
-            // the one way back that's always in the same place.
-            ToolbarItem(placement: .navigation) {
+            // screens have none at all, and even the others only offer it after
+            // scrolling to it. These two are always in the same place.
+            //
+            // They are different on purpose. Back is one step: from a group of
+            // orphans to the list it came from. Home is the start screen, from
+            // anywhere. Home used to do both, which made it a back button.
+            ToolbarItemGroup(placement: .navigation) {
                 Button {
-                    model.startOver()
+                    model.goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .help("Back")
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!model.canGoBack)
+
+                Button {
+                    model.goHome()
                 } label: {
                     Image(systemName: "house")
                 }
-                .help("Start over")
-                // Removing and restoring are in flight on the helper or the
-                // filesystem; leaving would abandon the phase that reports how it
-                // went, not the operation itself, so it stays disabled until done.
-                .disabled(model.phase == .removing || model.phase == .restoring)
+                .help("Home")
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(!model.canGoHome)
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $model.isDropTargeted) { providers in

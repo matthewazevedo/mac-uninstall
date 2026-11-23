@@ -75,11 +75,15 @@ struct ReviewView: View {
                 .foregroundStyle(DS.Palette.needsReview)
             }
 
+            if !result.sharedWithOtherApps.isEmpty {
+                SharedItemsNotice(items: result.sharedWithOtherApps)
+            }
+
             HStack(spacing: 8) {
                 Button("Select all") { model.selectAll() }
                 Button("Only certain matches") { model.selectCertainOnly() }
                 Spacer()
-                Button("Cancel") { model.startOver() }
+                Button("Cancel") { model.goBack() }
             }
             .buttonStyle(QuietButtonStyle(small: true))
         }
@@ -271,6 +275,60 @@ struct LeftoverRow: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(leftover.url.path, forType: .string)
             }
+        }
+    }
+}
+
+/// Says what a scan held back because another installed app uses it.
+///
+/// Leaving these out is what keeps a shared container — 1Password's SSH agent
+/// lives in one — from going with a sibling app. It also means some of this app's
+/// data may stay on disk, and the user should know that rather than assume a clean
+/// sweep. The paths are one click away for anyone who wants to check by hand.
+private struct SharedItemsNotice: View {
+    let items: [SharedItem]
+    @State private var expanded = false
+
+    private var names: [String] {
+        items.flatMap(\.usedBy).reduce(into: [String]()) { unique, name in
+            if !unique.contains(name) { unique.append(name) }
+        }
+    }
+
+    private var message: String {
+        let apps = ListFormatter.localizedString(byJoining: names)
+        let one = items.count == 1
+        let verb = names.count == 1 ? "uses" : "use"
+        let target = names.count == 1 ? apps : "those apps"
+        return "Kept \(items.count) item\(one ? "" : "s") that \(apps) also \(verb). "
+            + "Removing \(one ? "it" : "them") could break \(target), "
+            + "so \(one ? "it stays" : "they stay") on your Mac."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(message, systemImage: "person.2.fill")
+            .font(DS.TypeScale.secondary)
+            .foregroundStyle(DS.Palette.needsReview)
+
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(items) { item in
+                        Text(item.url.path)
+                            .font(DS.TypeScale.mono)
+                            .foregroundStyle(DS.Palette.textSecondary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(.top, 2)
+            } label: {
+                Text(expanded ? "Hide paths" : "Show paths")
+                    .font(DS.TypeScale.secondary)
+                    .foregroundStyle(DS.Palette.textTertiary)
+            }
+            .padding(.leading, 22)
         }
     }
 }
