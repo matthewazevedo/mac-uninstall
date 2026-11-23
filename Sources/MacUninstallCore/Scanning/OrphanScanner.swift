@@ -35,13 +35,18 @@ public struct OrphanScanner: Sendable {
     public struct Options: Sendable {
         public var measureSizes: Bool
         public var safetyCheck: @Sendable (URL) -> Bool
+        /// Reads an installed app's team and app groups. Injectable so tests can
+        /// describe apps that do not exist on disk.
+        public var readSigning: @Sendable (URL) -> SigningInfo?
 
         public init(
             measureSizes: Bool = true,
-            safetyCheck: @escaping @Sendable (URL) -> Bool = { ProtectedPaths.isSafeToRemove($0) }
+            safetyCheck: @escaping @Sendable (URL) -> Bool = { ProtectedPaths.isSafeToRemove($0) },
+            readSigning: @escaping @Sendable (URL) -> SigningInfo? = { SigningInfo.read(bundleURL: $0) }
         ) {
             self.measureSizes = measureSizes
             self.safetyCheck = safetyCheck
+            self.readSigning = readSigning
         }
     }
 
@@ -59,7 +64,11 @@ public struct OrphanScanner: Sendable {
     /// - Parameter installedApps: Everything still installed. Anything belonging to
     ///   one of these — or merely sharing its vendor namespace — is left alone.
     public func scan(installedApps: [AppIdentity]) async -> [OrphanGroup] {
-        let live = LiveIdentifiers(apps: installedApps)
+        // App discovery skips signatures to stay fast, but here they are the best
+        // evidence there is: a group container named in an installed app's
+        // entitlements is in use, whatever its name looks like.
+        let signing = installedApps.compactMap { options.readSigning($0.bundleURL) }
+        let live = LiveIdentifiers(apps: installedApps, signing: signing)
 
         let found = await withTaskGroup(of: [Leftover].self) { group in
             for location in locations {
@@ -169,7 +178,10 @@ public struct OrphanScanner: Sendable {
     static func normalized(_ stem: String) -> String {
         var parts = stem.split(separator: ".").map(String.init)
         var stripped = 0
-        while parts.count > 3, stripped < 2, let first = parts.first,
+        // Stop while at least two segments remain: `2BUA8C4S2C.com.1password` is a
+        // whole group container name, and requiring four segments left it unstripped,
+        // so 1Password's live SSH-agent container was listed as an orphan.
+        while parts.count > 2, stripped < 2, let first = parts.first,
               first.lowercased() == "group" || isTeamIdentifier(first) {
             parts.removeFirst()
             stripped += 1
@@ -189,12 +201,16 @@ struct LiveIdentifiers: Sendable {
     private let identifiers: Set<String>
     private let prefixes: Set<String>
     private let installedPaths: Set<String>
+    private let teamIDs: Set<String>
+    private let appGroups: Set<String>
 
-    init(apps: [AppIdentity]) {
+    init(apps: [AppIdentity], signing: [SigningInfo] = []) {
         var identifiers: Set<String> = []
         var prefixes: Set<String> = []
         var installedPaths: Set<String> = []
+        var teamIDs: Set<String> = []
         for app in apps {
+            if let team = app.teamID, !team.isEmpty { teamIDs.insert(team.lowercased()) }
             for identifier in app.strongIdentifiers { identifiers.insert(identifier.lowercased()) }
             if let prefix = app.reverseDNSPrefix { prefixes.insert(prefix.lowercased()) }
             installedPaths.insert(app.bundleURL.standardizedFileURL.path)
@@ -202,6 +218,11 @@ struct LiveIdentifiers: Sendable {
         self.identifiers = identifiers
         self.prefixes = prefixes
         self.installedPaths = installedPaths
+        for info in signing {
+            if let team = info.teamID, !team.isEmpty { teamIDs.insert(team.lowercased()) }
+        }
+        self.teamIDs = teamIDs
+        self.appGroups = Set(signing.flatMap(\.appGroups).map { $0.lowercased() })
     }
 
     /// True when `path` is exactly where a still-installed app lives.
@@ -218,6 +239,16 @@ struct LiveIdentifiers: Sendable {
     /// cross-contamination bug this project already fixed once.
     func claims(_ stem: String) -> Bool {
         let lowered = stem.lowercased()
+        if appGroups.contains(where: { lowered == $0 || lowered.hasPrefix($0 + ".") }) {
+            return true
+        }
+        // A team identifier is issued by Apple to one developer, and macOS only lets
+        // that developer's apps use `<TeamID>.*` group containers. While any app from
+        // the team is installed, such a container may be in use by it — 1Password's
+        // holds its SSH agent socket — whatever the rest of the name says.
+        if let first = lowered.split(separator: ".").first, teamIDs.contains(String(first)) {
+            return true
+        }
         if identifiers.contains(where: { Matcher.matchesIdentifier(stem: lowered, identifier: $0) }) {
             return true
         }

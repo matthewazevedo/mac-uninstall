@@ -100,11 +100,20 @@ public struct ScanResult: Sendable, Codable {
     /// Locations we could not read. Non-empty means the report is incomplete and
     /// the UI must say so rather than claiming a clean sweep.
     public var inaccessibleLocations: [URL]
+    /// Matches left out because another installed app uses them. Non-empty means
+    /// some of this app's data may stay behind, and the UI must say so.
+    public var sharedWithOtherApps: [SharedItem]
 
-    public init(identity: AppIdentity, leftovers: [Leftover], inaccessibleLocations: [URL] = []) {
+    public init(
+        identity: AppIdentity,
+        leftovers: [Leftover],
+        inaccessibleLocations: [URL] = [],
+        sharedWithOtherApps: [SharedItem] = []
+    ) {
         self.identity = identity
         self.leftovers = leftovers
         self.inaccessibleLocations = inaccessibleLocations
+        self.sharedWithOtherApps = sharedWithOtherApps
     }
 
     public var totalSizeBytes: Int64 {

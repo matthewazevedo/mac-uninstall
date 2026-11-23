@@ -61,7 +61,7 @@ struct SummaryView: View {
                 }
 
                 Spacer()
-                Button("Done") { model.startOver() }
+                Button("Done") { model.goHome() }
                     .buttonStyle(AccentButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }

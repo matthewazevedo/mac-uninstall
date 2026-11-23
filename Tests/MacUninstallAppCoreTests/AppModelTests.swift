@@ -164,9 +164,9 @@ final class AppModelTests: XCTestCase {
         )
     }
 
-    /// Cancelling out of a group goes back to the list rather than making the user
-    /// run the search again.
-    func testCancellingAGroupReturnsToTheOrphanList() {
+    // MARK: - Navigation
+
+    private func modelReviewingAnOrphanGroup() -> AppModel {
         let model = AppModel()
         let group = OrphanGroup(
             identifier: "com.acme.App",
@@ -174,17 +174,58 @@ final class AppModelTests: XCTestCase {
         )
         model.orphanGroups = [group]
         model.inspect(group)
+        return model
+    }
 
-        model.startOver()
+    /// Back from a group goes to the list rather than making the user search again.
+    func testBackFromAGroupReturnsToTheOrphanList() {
+        let model = modelReviewingAnOrphanGroup()
+
+        model.goBack()
 
         XCTAssertEqual(model.phase, .orphans)
         XCTAssertNil(model.scanResult)
+        XCTAssertEqual(model.orphanGroups.count, 1)
     }
 
-    func testCancellingAnOrdinaryScanReturnsToTheStartScreen() {
-        let model = makeModel(with: [leftover("/Users/x/Library/Caches/com.acme.App")])
-        model.startOver()
+    /// Home used to do what Back does here, which made it a second back button.
+    func testHomeFromAGroupGoesToTheStartScreen() {
+        let model = modelReviewingAnOrphanGroup()
+
+        model.goHome()
+
         XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.scanResult)
+        XCTAssertTrue(model.orphanGroups.isEmpty)
+    }
+
+    func testBackTwiceFromAGroupReachesTheStartScreen() {
+        let model = modelReviewingAnOrphanGroup()
+
+        model.goBack()
+        model.goBack()
+
+        XCTAssertEqual(model.phase, .idle)
+    }
+
+    func testBackFromAnOrdinaryScanReturnsToTheStartScreen() {
+        let model = makeModel(with: [leftover("/Users/x/Library/Caches/com.acme.App")])
+        model.phase = .reviewing
+
+        model.goBack()
+
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.scanResult)
+    }
+
+    func testThereIsNowhereToGoFromTheStartScreenOrMidRemoval() {
+        let model = AppModel()
+        XCTAssertFalse(model.canGoBack)
+        XCTAssertFalse(model.canGoHome)
+
+        model.phase = .removing
+        model.goHome()
+        XCTAssertEqual(model.phase, .removing, "Leaving would lose the report of how it went")
     }
 
     // MARK: - Undo

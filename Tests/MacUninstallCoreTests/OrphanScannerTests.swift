@@ -172,6 +172,52 @@ final class OrphanScannerTests: XCTestCase {
         XCTAssertTrue(groups.isEmpty)
     }
 
+    // MARK: - Vendor group containers
+
+    /// 1Password's container is `2BUA8C4S2C.com.1password`: a team ID and only two
+    /// more segments, for an app whose bundle ID is `com.1password.1password`. It
+    /// holds the SSH agent socket, and it was listed as an orphan while 1Password ran.
+    func testLeavesAThreeSegmentGroupContainerOfAnInstalledVendorAlone() async throws {
+        _ = try make("Group Containers/2BUA8C4S2C.com.1password", isDirectory: true)
+
+        let groups = await scanner(["Group Containers": .containers])
+            .scan(installedApps: [app("com.1password.1password")])
+
+        XCTAssertTrue(groups.isEmpty)
+    }
+
+    /// The entitlement is authoritative even when nothing in the name resembles
+    /// the app's bundle ID.
+    func testLeavesAContainerNamedInAnInstalledAppsEntitlementsAlone() async throws {
+        _ = try make("Group Containers/ABCDE12345.com.unrelated.shared", isDirectory: true)
+
+        let scanner = OrphanScanner(
+            locations: [SearchLocation(url: library.appending(path: "Group Containers"), category: .containers)],
+            options: .init(
+                measureSizes: false,
+                safetyCheck: { _ in true },
+                readSigning: { _ in SigningInfo(appGroups: ["ABCDE12345.com.unrelated.shared"]) }
+            )
+        )
+
+        let groups = await scanner.scan(installedApps: [app("com.acme.App")])
+        XCTAssertTrue(groups.isEmpty)
+    }
+
+    /// macOS only lets a team's own apps use `<TeamID>.*`, so while any of them is
+    /// installed the container may be in use, whatever the rest of the name says.
+    func testLeavesAnyContainerOfAnInstalledTeamAlone() async throws {
+        _ = try make("Group Containers/ABCDE12345.net.oldname.data", isDirectory: true)
+        _ = try make("Group Containers/ZZZZZ99999.com.gone.App", isDirectory: true)
+
+        var installed = app("com.acme.App")
+        installed.teamID = "ABCDE12345"
+        let groups = await scanner(["Group Containers": .containers])
+            .scan(installedApps: [installed])
+
+        XCTAssertEqual(groups.map(\.identifier), ["com.gone.App"])
+    }
+
     // MARK: - Grouping rules
 
     func testIdentifiersAreNormalisedBeforeGrouping() {
@@ -181,6 +227,7 @@ final class OrphanScannerTests: XCTestCase {
             OrphanScanner.groupIdentifier(for: "Q6L2SF6YDW.com.acme.shared.data"),
             "com.acme.shared"
         )
+        XCTAssertEqual(OrphanScanner.normalized("2BUA8C4S2C.com.1password"), "com.1password")
         XCTAssertTrue(OrphanScanner.isTeamIdentifier("Q6L2SF6YDW"))
         XCTAssertFalse(OrphanScanner.isTeamIdentifier("com"))
     }

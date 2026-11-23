@@ -41,7 +41,7 @@ struct OrphanListView: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                 }
                 Spacer()
-                Button("Done") { model.startOver() }
+                Button("Done") { model.goHome() }
                     .buttonStyle(QuietButtonStyle(small: true))
             }
 
@@ -58,6 +58,20 @@ struct OrphanListView: View {
                 Each of these is a bundle identifier with no installed app behind it. \
                 Nothing is pre-selected, and nothing is removed until you review it.
                 """)
+                .font(DS.TypeScale.secondary)
+                .foregroundStyle(DS.Palette.textTertiary)
+
+            // Held back on purpose: a developer's apps share data, and while any of
+            // them is installed this cannot tell a removed app's share from a live
+            // one's. 1Password's SSH-agent container was listed here once that way.
+            Label(
+                """
+                Some leftovers may be missing. Files shared by one developer's apps stay \
+                hidden while any of that developer's apps are still installed, because \
+                removing them could break those apps.
+                """,
+                systemImage: "person.2.fill"
+            )
                 .font(DS.TypeScale.secondary)
                 .foregroundStyle(DS.Palette.textTertiary)
         }
